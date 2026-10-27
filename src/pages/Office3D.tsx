@@ -32,13 +32,12 @@ function Character({ station, placement, layout, floor, onSelect, anchor }: { st
   const offline = station.state === 'Offline'
   const unknown = station.state === 'Unknown'
   const tint = (color: string) => offline ? '#7b7f7d' : color
-  // Only the first placement is applied as a prop; later changes are walked to via the aisle.
-  const [start] = useState<Vec3>(() => placement.position)
+  const [start] = useState<Vec3>(() => placement?.position || [0, 0, 0])
   const path = useRef<THREE.Vector3[]>([])
-  const destination = placement.position.join(',')
+  const destination = placement?.position ? placement.position.join(',') : '0,0,0'
   useEffect(() => {
     const group = root.current
-    if (!group) return
+    if (!group || !placement?.position) return
     path.current = walkPath3([group.position.x, group.position.y, group.position.z], placement.position, layout).map(([px, py, pz]) => new THREE.Vector3(px, py, pz))
     // placement.position is captured through `destination`.
     // eslint-disable-next-line react-hooks/exhaustive-deps

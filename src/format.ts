@@ -44,7 +44,12 @@ export function formatBytes(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`
 }
 
-/** Display name for an agent: its Hermes profile name as-is. */
+/** Display name for an agent. */
 export function agentLabel(profile: string | undefined): string {
-  return profile ?? 'Hermes'
+  if (!profile) return 'Claude'
+  if (profile === 'ceo') return 'CEO'
+  if (profile === 'marketing') return 'Marketing & Sales'
+  if (profile === 'researcher') return 'Researcher'
+  if (profile === 'creator') return 'Creator (Video Editor)'
+  return profile
 }

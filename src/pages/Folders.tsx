@@ -113,7 +113,7 @@ export function Folders() {
   const data = snapshot.status === 'ready' ? snapshot.data : undefined
   const agent = data?.agents.find((item) => item.profile === openAgent)
   const source = data ? { availability: 'available' as const, data: null } : undefined
-  return <><PageTitle eyebrow="AGENT FOLDERS" title="Folders">Each agent's own folder, read-only: its Hermes profile folder (SOUL.md, memories, skills, cron, config…) or, for OpenCode, its home folder. Every agent only shows its own files. Credential files are listed but never opened.</PageTitle>
+  return <><PageTitle eyebrow="WORKSPACE & ASSETS" title="Workspace Folders">Folder proyek lokal yang terhubung ke setiap agen Claude: jelajahi struktur file, source code, aset kreatif, dan dokumen referensi secara langsung.</PageTitle>
     {!agent && <SourceStatus source={source} fetchedAt={data?.fetchedAt} request={snapshot}/>}
     <Unavailable source={source} request={snapshot}/>
     {snapshot.status === 'pending' ? <LoadingState message="Finding agent folders..."/> : agent ? <><PrivateGate agent={agent.profile}><Browser key={agent.profile} agent={agent} onBack={() => setOpenAgent(undefined)}/></PrivateGate>{agentPrivacy(lock, agent.profile) === 'locked' && <button type="button" className="refresh-button" onClick={() => setOpenAgent(undefined)}>← ALL AGENTS</button>}</> : data && <section className="folder-agents">{data.agents.map((item) => <button type="button" key={item.profile} className="folder-agent" disabled={!item.available} onClick={() => setOpenAgent(item.profile)}>

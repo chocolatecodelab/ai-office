@@ -18,7 +18,17 @@ export function hashName(name: string): number {
   return hash >>> 0
 }
 
+const SPECIAL_LOOKS: Record<string, AgentLook> = {
+  ceo: { hair: '#1d293c', skin: '#e9b57d', shirt: '#2c3e50', pants: '#1a252f' },
+  marketing: { hair: '#8b5a2b', skin: '#f1c9a0', shirt: '#e67e22', pants: '#34495e' },
+  researcher: { hair: '#2f4f3a', skin: '#e9b57d', shirt: '#16a085', pants: '#2c3e50' },
+  creator: { hair: '#6a4d8d', skin: '#dca06e', shirt: '#8e44ad', pants: '#2d3436' }
+}
+
 export function agentLook(id: string): AgentLook {
+  if (SPECIAL_LOOKS[id]) {
+    return SPECIAL_LOOKS[id]
+  }
   const hash = hashName(id)
   return { hair: HAIR[hash % HAIR.length], skin: SKIN[(hash >>> 4) % SKIN.length], shirt: SHIRT[(hash >>> 8) % SHIRT.length], pants: PANTS[(hash >>> 12) % PANTS.length] }
 }
