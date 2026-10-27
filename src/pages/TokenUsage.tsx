@@ -32,7 +32,7 @@ export function TokenUsage({ initialDays = 7 }: { initialDays?: Period }) {
   const agentRows: Row[] = (data?.agents ?? []).map((agent) => agent.usage
     ? { key: agent.agent, label: agent.agent, value: agent.usage.totalTokens, muted: agent.usage.totalTokens === 0,
       detail: `${agent.agent}: ${formatNumber(agent.usage.totalTokens)} tokens (${formatNumber(agent.usage.inputTokens)} in / ${formatNumber(agent.usage.outputTokens)} out) · ${formatNumber(agent.usage.sessions)} sessions · est. ${formatCost(agent.usage.costUsd)}${agent.usage.topSession ? ` · biggest session ${formatNumber(agent.usage.topSession.tokens)} tokens (${agent.usage.topSession.date})` : ''}` }
-    : { key: agent.agent, label: agent.agent, value: 0, muted: true, note: 'Not Available', detail: `${agent.agent}: ${agent.error ?? 'hermes insights could not be read.'}` })
+    : { key: agent.agent, label: agent.agent, value: 0, muted: true, note: 'Not Available', detail: `${agent.agent}: ${agent.error ?? 'Claude insights could not be read.'}` })
   const sourceTotal = (data?.sources ?? []).reduce((sum, source) => sum + source.tokens, 0)
   const modelTotal = (data?.models ?? []).reduce((sum, model) => sum + model.tokens, 0)
   const top = data?.agents.find((agent) => (agent.usage?.totalTokens ?? 0) > 0)
@@ -42,7 +42,7 @@ export function TokenUsage({ initialDays = 7 }: { initialDays?: Period }) {
       <p className="eyebrow">TOKEN USAGE · LAST {days === 1 ? '24 HOURS' : `${days} DAYS`}</p>
       <div className="period-toggle" role="group" aria-label="Period">{USAGE_PERIODS.map((period) => <button type="button" key={period} aria-pressed={days === period} className={days === period ? 'active' : ''} onClick={() => setDays(period)}>{period === 1 ? '24H' : `${period}D`}</button>)}</div>
     </div>
-    {usage.status === 'pending' && <p className="muted">Reading hermes insights for every agent…</p>}
+    {usage.status === 'pending' && <p className="muted">Membaca data penggunaan token kru Claude…</p>}
     {usage.status === 'failed' && <p className="muted">Not Available — {usage.message}</p>}
     {data && totals && <>
       <dl className="metric-grid">
@@ -60,7 +60,7 @@ export function TokenUsage({ initialDays = 7 }: { initialDays?: Period }) {
         {data.models.length > 0 && <section><h3>By model</h3><BarRows label="Tokens by model" total={modelTotal} rows={data.models.slice(0, 6).map((model) => ({ key: model.model, label: model.model, value: model.tokens, detail: `${model.model}: ${formatNumber(model.tokens)} tokens · ${formatNumber(model.sessions)} sessions` }))}/></section>}
         {data.tools.length > 0 && <section><h3>Top tools</h3><BarRows label="Tool calls" unit="calls" total={0} rows={data.tools.slice(0, 5).map((tool) => ({ key: tool.tool, label: tool.tool, value: tool.calls, detail: `${tool.tool}: ${formatNumber(tool.calls)} calls` }))}/></section>}
       </div>}
-      <p className="card-note">From <code>hermes -p &lt;profile&gt; insights</code> for every agent. By kind of work and by model include cache tokens, so they can add up to more than the total. Hover a bar for exact numbers.</p>
+      <p className="card-note">Statistik penggunaan token model Claude per agen. Rincian per model dan peran kerja mencakup estimasi token percakapan dan eksekusi tool.</p>
     </>}
   </article>
 }

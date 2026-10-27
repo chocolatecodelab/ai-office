@@ -43,7 +43,7 @@ function Shell({ onRefresh, access, onAccessChange }: { onRefresh: () => void; a
     window.addEventListener('hashchange', onHashChange)
     return () => window.removeEventListener('hashchange', onHashChange)
   }, [])
-  useEffect(() => { document.title = `${page} · Ruang` }, [page])
+  useEffect(() => { document.title = `${page} · Claude AI Office` }, [page])
   useEffect(() => {
     if (menuOpen) drawer.current?.querySelector<HTMLElement>('nav a[aria-current="page"], nav a')?.focus()
   }, [menuOpen])
@@ -80,9 +80,9 @@ function Shell({ onRefresh, access, onAccessChange }: { onRefresh: () => void; a
   return <div className={`app${page === 'Office' ? ' app-office' : ''}`}>
     {menuOpen && <div className="drawer-backdrop" onClick={closeMenu} aria-hidden="true"/>}
     <aside id="app-sidebar" className="drawer" ref={drawer} hidden={!menuOpen} aria-label="Menu">
-      <div className="drawer-head"><a className="brand" href="#/office" onClick={(event) => { event.preventDefault(); navigate(HOME) }}>RUANG<span>HERMES 3D</span></a><button type="button" className="icon-button" onClick={closeMenu} aria-label="Close menu" title="Close menu (Esc)">✕</button></div>
+      <div className="drawer-head"><a className="brand" href="#/office" onClick={(event) => { event.preventDefault(); navigate(HOME) }}>RUANG<span>CLAUDE 3D</span></a><button type="button" className="icon-button" onClick={closeMenu} aria-label="Close menu" title="Close menu (Esc)">✕</button></div>
       <nav aria-label="Main">{navigation.map((item) => <a href={`#/${pageSlug(item)}`} className={page === item ? 'active' : ''} aria-current={page === item ? 'page' : undefined} key={item} onClick={(event) => { event.preventDefault(); navigate(item) }}>{item}{item === 'Logs' && data && data.commands.failed > 0 && <span className="nav-badge" title="Failed CLI reads">{data.commands.failed}</span>}</a>)}</nav>
-      <div className="sidebar-note"><span className="dot"/> READ-ONLY MODE</div>
+      <div className="sidebar-note"><span className="dot" style={{ background: '#48bb78' }}/> CLAUDE CREW ACTIVE</div>
       <small className="drawer-hint">Press M to open or close this menu</small>
     </aside>
     <main><header><span className="header-title"><button type="button" ref={menuButton} className="icon-button menu-button" onClick={() => (menuOpen ? closeMenu() : setMenuOpen(true))} aria-controls="app-sidebar" aria-expanded={menuOpen} aria-label={menuOpen ? 'Close menu' : 'Open menu'} title="Menu (M)">☰{alerts > 0 && <span className="menu-alert" aria-label={`${alerts} alert${alerts === 1 ? '' : 's'} in the menu`}/>}</button><span>RUANG / {page.toUpperCase()}</span></span><span className="header-actions"><span className={`sync-label${dashboard.status === 'failed' ? ' text-bad' : ''}`}>{syncLabel}</span><button type="button" className="icon-button theme-toggle" onClick={toggleTheme} aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`} title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}>{theme === 'dark' ? '☀' : '☾'}</button><button type="button" className="refresh-button" onClick={onRefresh} aria-label="Refresh all sources">↻ REFRESH</button></span></header>

@@ -25,7 +25,7 @@ export function Stats({ dashboard, pending = false, onNavigate }: { dashboard: D
   return <div className="stats-view">
     {hermesMissing && <section className="notice" role="status"><strong>Hermes CLI not found.</strong> Ruang reads everything through the <code>hermes</code> command. Install Hermes Agent and make sure <code>hermes</code> is on the PATH of the shell that runs <code>npm run dev</code>, then press Refresh all.</section>}
     <section className="stat-grid" aria-label="Key statistics">
-      <StatTile label="Gateways running" value={`${office.gatewaysReachable} / ${office.gatewaysDeclared}`} detail="Hermes profiles" onClick={go('Agents')}/>
+      <StatTile label="Gateways running" value={`${office.gatewaysReachable} / ${office.gatewaysDeclared}`} detail="Claude agents" onClick={go('Agents')}/>
       <StatTile label="Crew active" value={`${office.active} / ${office.declared}`} detail={`${office.idle} idle · ${office.offline} offline · ${office.unknown} unknown`} />
       <StatTile label="Open tasks" value={tasks.availability === 'available' ? formatNumber(openTasks) : 'Not Available'} detail={tasks.availability === 'available' ? `${formatNumber(tasks.total)} total · ${tasks.byStatus.running ?? 0} running` : undefined} onClick={go('Task Board')}/>
       <StatTile label="Scheduled jobs" value={availableCount(calendar)} detail={calendar.availability === 'available' ? `${calendar.active} active · ${calendar.paused} paused` : undefined} onClick={go('Calendar')}/>
@@ -50,7 +50,7 @@ export function Stats({ dashboard, pending = false, onNavigate }: { dashboard: D
       <article className="card">
         <p className="eyebrow">RUNTIME</p>
         <dl className="runtime-list">
-          <div><dt>Hermes profiles</dt><dd>{runtime.profiles.availability === 'available' ? runtime.profiles.data.length : 'Not Available'}</dd></div>
+          <div><dt>Claude agents</dt><dd>{runtime.profiles.availability === 'available' ? runtime.profiles.data.length : 'Not Available'}</dd></div>
           <div><dt>Gateways running</dt><dd>{runtime.profiles.availability === 'available' ? `${runtime.profiles.data.filter((profile) => profile.gateway === 'Running').length} of ${runtime.profiles.data.length}` : 'Not Available'}</dd></div>
           <div><dt>Models in use</dt><dd>{runtime.profiles.availability === 'available' ? [...new Set(runtime.profiles.data.map((profile) => profile.model).filter((model) => model !== 'Not configured'))].join(', ') || '—' : 'Not Available'}</dd></div>
           <div><dt>OpenCode</dt><dd>{runtime.openCode.availability === 'available' ? runtime.openCode.data : 'Not installed'}</dd></div>
@@ -66,6 +66,6 @@ export function Stats({ dashboard, pending = false, onNavigate }: { dashboard: D
         </dl>
       </article>
     </section>
-    <p className="card-note">Live reads from Hermes and OpenCode, cached server-side for 10 seconds and refreshed automatically.</p>
+    <p className="card-note">Live reads dari layanan agen Claude AI Office, diperbarui otomatis.</p>
   </div>
 }

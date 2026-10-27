@@ -72,13 +72,15 @@ function AgentTokens({ agent }: { agent: string }) {
   return <div><dt>Tokens (7 days)</dt><dd>{mine ? `${formatNumber(mine.totalTokens)} · #${index + 1} of ${ranked.length}${mine.costUsd !== undefined ? ` · est. ${formatCost(mine.costUsd)}` : ''}${mine.topSession ? ` · biggest session ${formatCompact(mine.topSession.tokens)}` : ''}` : 'Not Available'}</dd></div>
 }
 
-type DetailTab = 'Overview' | 'Folder' | 'Memory'
-const DETAIL_TABS: DetailTab[] = ['Overview', 'Folder', 'Memory']
+import { AgentChat } from '../components/AgentChat.tsx'
+
+type DetailTab = 'Chat' | 'Overview' | 'Folder' | 'Memory'
+const DETAIL_TABS: DetailTab[] = ['Chat', 'Overview', 'Folder', 'Memory']
 
 export function OfficeDetail({ station, onClose }: { station: OfficeStation; onClose: () => void }) {
   const closeRef = useRef<HTMLButtonElement>(null)
   const dialogRef = useRef<HTMLElement>(null)
-  const [tab, setTab] = useState<DetailTab>('Overview')
+  const [tab, setTab] = useState<DetailTab>('Chat')
   useEffect(() => { closeRef.current?.focus() }, [])
   const badge = officeStateBadge(station.state)
   const profile = station.id
@@ -98,13 +100,14 @@ export function OfficeDetail({ station, onClose }: { station: OfficeStation; onC
   return <div className="office-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
     <section className={`office-detail${tab === 'Overview' ? '' : ' wide'}`} ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="office-detail-title" onKeyDown={onKeyDown}>
       <button className="office-close" ref={closeRef} onClick={onClose} aria-label={`Close ${station.name} details`}>Close</button>
-      <div className="detail-head"><div className="detail-avatar"><PixelCharacter agent={station.id}/></div><div><p className="eyebrow">STATION DETAIL</p><h2 id="office-detail-title">{station.name}</h2><span className={`badge ${badge.tone}`}>{officeStateLabel(station)}</span>{station.privacy === 'locked' && <span className="badge muted">🔒 Locked</span>}</div></div>
+      <div className="detail-head"><div className="detail-avatar"><PixelCharacter agent={station.id}/></div><div><p className="eyebrow">CLAUDE AI AGENT</p><h2 id="office-detail-title">{station.name}</h2><span className={`badge ${badge.tone}`}>{officeStateLabel(station)}</span>{station.privacy === 'locked' && <span className="badge muted">🔒 Locked</span>}</div></div>
       {profile && <div className="detail-tabs" role="tablist" aria-label={`${station.name} details`}>{DETAIL_TABS.map((item) => <button type="button" role="tab" key={item} aria-selected={tab === item} className={tab === item ? 'active' : ''} onClick={() => setTab(item)}>{item}</button>)}</div>}
       <div role="tabpanel" aria-label={tab} className="detail-body">
+        {tab === 'Chat' && <AgentChat station={station} onSwitchTab={setTab}/>}
         {tab === 'Overview' && <>{station.privacy === 'locked' && <p className="file-notice">🔒 {station.name} is locked: its task, activity, memory and files are private. Open the Folder or Memory tab to enter the PIN.</p>}
           {station.privacy === 'unlocked' && <RelockBar agent={station.id} minutes={15}/>}
           {station.activity && <p className="detail-activity">{station.activity}</p>}
-          <dl className="office-detail-grid"><div><dt>Agent type</dt><dd>{station.role}</dd></div>{station.role !== 'OpenCode' && <AgentTokens agent={station.id}/>}<div><dt>Current room</dt><dd>{station.room} / {station.roomPosition}</dd></div><div><dt>Current task</dt><dd>{station.currentTask}</dd></div><div><dt>Recent activity</dt><dd>{station.recentActivity}</dd></div><div><dt>Source / provenance</dt><dd>{station.provenance}</dd></div><div><dt>Freshness</dt><dd>{station.freshness}</dd></div></dl></>}
+          <dl className="office-detail-grid"><div><dt>Agent role</dt><dd>{station.role}</dd></div>{station.role !== 'OpenCode' && <AgentTokens agent={station.id}/>}<div><dt>Current room</dt><dd>{station.room} / {station.roomPosition}</dd></div><div><dt>Current task</dt><dd>{station.currentTask}</dd></div><div><dt>Recent activity</dt><dd>{station.recentActivity}</dd></div><div><dt>Source / provenance</dt><dd>{station.provenance}</dd></div><div><dt>Freshness</dt><dd>{station.freshness}</dd></div></dl></>}
         {tab === 'Folder' && profile && <AgentFolder profile={profile}/>}
         {tab === 'Memory' && profile && <AgentMemoryView profile={profile}/>}
       </div>
@@ -138,7 +141,7 @@ function hudItems(office: OfficeSnapshot | undefined, dashboard: DashboardSnapsh
   const items: HudItem[] = []
   if (summary) {
     items.push({ label: 'Crew active', value: `${summary.active}/${summary.declared}`, title: `${summary.idle} idle · ${summary.offline} offline · ${summary.unknown} unknown` })
-    items.push({ label: 'Gateways', value: `${summary.gatewaysReachable}/${summary.gatewaysDeclared}`, title: 'Profiles whose Hermes gateway is running (CLI-only agents need none)', page: 'Agents' })
+    items.push({ label: 'Model', value: 'Claude 5.5 Pro', title: 'Claude 5.5 Sonnet / Opus Engine Active', page: 'Settings' })
   }
   if (!dashboard) return items
   const { tasks, calendar, commands } = dashboard
@@ -186,6 +189,17 @@ export function Office({ dashboard, dashboardPending = false, onNavigate }: { da
     setSelectedName(undefined)
     selectedTrigger.current?.focus()
   }
+
+  useEffect(() => {
+    const hash = window.location.hash
+    if (hash.includes('agent=')) {
+      const match = hash.match(/agent=([a-z0-9_-]+)/i)
+      if (match && office?.stations) {
+        const found = office.stations.find((s) => s.id === match[1] || s.name.toLowerCase().includes(match[1].toLowerCase()))
+        if (found) setSelectedName(found.name)
+      }
+    }
+  }, [office?.stations])
   if (snapshot.status === 'pending') return <LoadingState message="Reading office state..."/>
   const hud = hudItems(office, dashboard)
   // Hot desking: one unlabeled desk per agent.

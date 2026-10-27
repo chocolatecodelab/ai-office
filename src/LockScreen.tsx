@@ -25,7 +25,7 @@ export function LockScreen({ status, onUnlocked }: { status: AccessStatus; onUnl
 
   return <main className="lock-screen">
     <form className="lock-card" onSubmit={submit} aria-labelledby="lock-title">
-      <p className="brand">RUANG<span>HERMES 3D</span></p>
+      <p className="brand">RUANG<span>CLAUDE 3D</span></p>
       <h1 id="lock-title">Enter access code</h1>
       <p className="muted">This Ruang is protected with an access code.</p>
       <label className="field-label" htmlFor="access-code">Access code</label>
