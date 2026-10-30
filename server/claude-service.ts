@@ -160,6 +160,8 @@ export type ActivityPhase = 'started' | 'progress' | 'done' | 'failed'
 
 // A mirrored task whose Project never reported back stops showing its agent at work after this long.
 const MIRROR_STALE_MS = 2 * 60 * 60 * 1000
+// A mirrored task that just finished keeps its agent at the desk this long, so short work is still seen.
+const MIRROR_FINISH_HOLD_MS = 20_000
 
 export interface ClaudeScheduledJob {
   id: string
@@ -1416,8 +1418,11 @@ Halo! Saya **Creative Director & Video Editor**. Berikut konsep video yang saya 
       // The office follows the board: an idle agent with a running task sits at its desk working on it.
       const running = this.tasks.find((task) => task.assignee === agent.id && task.status === 'running' &&
         (task.source !== 'mirror' || Date.now() - Date.parse(task.updatedAt) < MIRROR_STALE_MS))
-      const s = live.state === 'Idle' && running && !this.isMeetingActive
-        ? { ...live, state: 'Working' as const, room: 'Workspace' as const, roomPosition: 'assigned-desk', currentTask: running.title, activity: running.progress || `Mengerjakan: ${running.title}` }
+      const finished = running ? undefined : this.tasks.find((task) => task.assignee === agent.id && task.source === 'mirror' &&
+        task.status === 'review' && task.completedAt && Date.now() - Date.parse(task.completedAt) < MIRROR_FINISH_HOLD_MS)
+      const s = live.state !== 'Idle' || this.isMeetingActive ? live
+        : running ? { ...live, state: 'Working' as const, room: 'Workspace' as const, roomPosition: 'assigned-desk', currentTask: running.title, activity: running.progress || `Mengerjakan: ${running.title}` }
+        : finished ? { ...live, state: 'Reviewing' as const, room: 'Workspace' as const, roomPosition: 'assigned-desk', currentTask: finished.title, activity: `Selesai: ${finished.title}` }
         : live
       return {
         id: agent.id,

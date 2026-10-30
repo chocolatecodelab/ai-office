@@ -155,7 +155,7 @@ function hudItems(office: OfficeSnapshot | undefined, dashboard: DashboardSnapsh
 }
 
 export function Office({ dashboard, dashboardPending = false, onNavigate }: { dashboard?: DashboardSnapshot | null; dashboardPending?: boolean; onNavigate?: (page: Page) => void } = {}) {
-  const snapshot = usePolling<OfficeSnapshot>('/api/office', 10_000)
+  const snapshot = usePolling<OfficeSnapshot>('/api/office', 3_000)
   const activitySnapshot = usePolling<ActivitySnapshot>('/api/activity', 15_000)
   const channelsSnapshot = usePolling<ChannelSnapshot>('/api/channels', 30_000)
   const office = snapshot.status === 'ready' ? snapshot.data : undefined

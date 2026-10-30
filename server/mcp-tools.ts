@@ -104,7 +104,7 @@ Isi dari Project yang sedang aktif: instructions = instruksi Project (custom ins
   server.registerTool('report_activity', {
     title: 'Laporkan pekerjaan ke AI Office',
     description: `Mode cermin: laporkan pekerjaan yang Anda kerjakan sendiri di Project ini ke AI Office, supaya agen Project ini terlihat bekerja di kantor dan hasilnya tercatat di Kanban.
-Panggil phase="started" di awal setiap pekerjaan (simpan activity_id yang dikembalikan), opsional phase="progress" untuk tahap penting, lalu phase="done" dengan ringkasan hasil (sebut nama file/artefak) atau phase="failed" dengan alasannya.
+Panggil phase="started" sebagai LANGKAH PERTAMA, sebelum mulai mengerjakan apa pun (bukan setelah selesai; simpan activity_id yang dikembalikan), opsional phase="progress" untuk tahap penting, lalu phase="done" dengan ringkasan hasil (sebut nama file/artefak) atau phase="failed" dengan alasannya.
 agent = id agen dari list_agents, atau nama Project persis (misalnya "AI OFFICE - EVENT"). Tidak mengerjakan apa pun di office; pekerjaan tetap dilakukan di Project.`,
     inputSchema: {
       agent: agentId,
