@@ -145,6 +145,11 @@ export interface StoredTask {
   priority: number
   createdAt: string
   updatedAt: string
+  startedAt?: string
+  completedAt?: string
+  /** The agent's reply from the last run. */
+  result?: string
+  lastError?: string
 }
 
 export interface ClaudeScheduledJob {
@@ -1280,7 +1285,7 @@ Halo! Saya **Creative Director & Video Editor**. Berikut konsep video yang saya 
         id: `task-${Date.now()}`,
         title: args.task_title || 'Tugas Baru',
         description: args.task_description || '',
-        status: 'running',
+        status: 'todo',
         assignee: args.target_agent,
         priority: args.priority || 2,
         createdAt: new Date().toISOString(),
@@ -1310,7 +1315,10 @@ Halo! Saya **Creative Director & Video Editor**. Berikut konsep video yang saya 
         this.saveStorage()
       }
 
-      return { success: true, taskId: newTask.id, message: `Tugas berhasil diberikan kepada ${args.target_agent}` }
+      // The delegated agent really works on it (the run moves the task to review), instead of only looking busy.
+      void this.runTaskNow(newTask.id)
+
+      return { success: true, taskId: newTask.id, message: `Tugas berhasil diberikan kepada ${args.target_agent} dan sedang dikerjakan` }
     }
 
     if (name === 'call_team_meeting') {
@@ -1330,7 +1338,12 @@ Halo! Saya **Creative Director & Video Editor**. Berikut konsep video yang saya 
 
   public getOfficeSnapshot(): OfficeSnapshot {
     const stations: OfficeStation[] = CLAUDE_AGENTS.map((agent) => {
-      const s = this.agentStates.get(agent.id)!
+      const live = this.agentStates.get(agent.id)!
+      // The office follows the board: an idle agent with a running task sits at its desk working on it.
+      const running = this.tasks.find((task) => task.assignee === agent.id && task.status === 'running')
+      const s = live.state === 'Idle' && running && !this.isMeetingActive
+        ? { ...live, state: 'Working' as const, room: 'Workspace' as const, roomPosition: 'assigned-desk', currentTask: running.title, activity: `Mengerjakan: ${running.title}` }
+        : live
       return {
         id: agent.id,
         name: agent.name,
@@ -1425,6 +1438,10 @@ Halo! Saya **Creative Director & Video Editor**. Berikut konsep video yang saya 
           assignee: t.assignee,
           priority: t.priority,
           body: t.description || 'Tidak ada deskripsi detail.',
+          result: t.result,
+          lastError: t.lastError,
+          startedAt: t.startedAt,
+          completedAt: t.completedAt,
           workspace: mem?.workspacePath || process.cwd(),
           model: agent?.model || this.config.defaultModel,
           skills: ['claude-agent-sdk', 'task-orchestration'],
@@ -1521,7 +1538,10 @@ Halo! Saya **Creative Director & Video Editor**. Berikut konsep video yang saya 
     if (!t) return { success: false, message: 'Tugas tidak ditemukan.' }
 
     t.status = 'running'
-    t.updatedAt = new Date().toISOString()
+    t.startedAt = new Date().toISOString()
+    t.updatedAt = t.startedAt
+    t.lastError = undefined
+    this.saveStorage()
 
     const targetAgent = t.assignee || 'ceo'
     const prompt = `[EKSEKUSI TUGAS KANBAN: "${t.title}"]\n${t.description}\n\nSilakan kerjakan tugas ini sesuai dengan peran dan spesialisasi Anda.`
@@ -1530,10 +1550,15 @@ Halo! Saya **Creative Director & Video Editor**. Berikut konsep video yang saya 
     try {
       const execResult = await this.sendMessage(targetAgent, prompt)
       res = execResult.response
+      t.result = res
       t.status = 'review'
-      t.updatedAt = new Date().toISOString()
+      t.completedAt = new Date().toISOString()
+      t.updatedAt = t.completedAt
     } catch (err: any) {
       res = `Gagal mengeksekusi tugas: ${err.message}`
+      t.lastError = res
+      t.status = 'todo'
+      t.updatedAt = new Date().toISOString()
     }
     this.saveStorage()
     return { success: true, message: `Tugas "${t.title}" selesai dikerjakan oleh ${targetAgent}.`, response: res }

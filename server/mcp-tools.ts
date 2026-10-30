@@ -31,6 +31,11 @@ export interface OfficeBackend {
 // Agents change as Projects are registered, so ids are checked against the live crew instead of a fixed enum.
 const agentId = z.string().min(1).describe('Id agen dari list_agents, misalnya "ceo" (orchestrator) atau id agen sebuah Project')
 
+/** Runs a task without holding the MCP request open; the outcome is stored on the task. */
+function startInBackground(backend: OfficeBackend, taskId: string): void {
+  backend.runTask(taskId).catch((error: unknown) => console.error(`Task ${taskId} failed:`, error))
+}
+
 async function ensureAgent(backend: OfficeBackend, id: string): Promise<void> {
   const agents = await backend.agents()
   if (!agents.some((agent) => agent.id === id)) throw new Error(`Agen "${id}" tidak ada. Agen yang tersedia: ${agents.map((agent) => agent.id).join(', ')}.`)
@@ -128,16 +133,20 @@ Isi dari Project yang sedang aktif: instructions = instruksi Project (custom ins
 
   server.registerTool('create_task', {
     title: 'Buat tugas',
-    description: 'Tambahkan tugas baru ke papan Kanban dan tugaskan ke satu agen.',
+    description: 'Tambahkan tugas baru ke papan Kanban dan tugaskan ke satu agen. Dengan start_now, agen langsung mengerjakannya (terlihat bekerja di kantor); hasilnya nanti bisa dibaca dengan get_task.',
     inputSchema: {
       title: z.string().min(1),
       description: z.string().default(''),
       assignee: agentId,
       priority: z.number().int().min(1).max(3).default(2).describe('1 rendah, 2 normal, 3 mendesak'),
+      start_now: z.boolean().default(false).describe('true agar agen langsung mulai mengerjakan tugas ini'),
     },
-  }, tool(async (args: NewTask) => {
-    await ensureAgent(backend, args.assignee)
-    return backend.createTask(args)
+  }, tool(async ({ start_now, ...task }: NewTask & { start_now: boolean }) => {
+    await ensureAgent(backend, task.assignee)
+    const created = await backend.createTask(task) as { task?: { id: string } }
+    if (!start_now || !created.task) return created
+    startInBackground(backend, created.task.id)
+    return { ...created, started: true, note: `Agen ${task.assignee} mulai mengerjakan. Cek hasilnya dengan get_task id ${created.task.id}.` }
   }))
 
   server.registerTool('update_task_status', {
@@ -148,9 +157,13 @@ Isi dari Project yang sedang aktif: instructions = instruksi Project (custom ins
 
   server.registerTool('run_task', {
     title: 'Kerjakan tugas',
-    description: 'Minta agen yang ditugaskan untuk mengerjakan tugas sekarang. Tugas pindah ke review setelah selesai, dan hasilnya dikembalikan.',
-    inputSchema: { id: z.string() },
-  }, tool(async ({ id }: { id: string }) => backend.runTask(id)))
+    description: 'Minta agen yang ditugaskan untuk mengerjakan tugas sekarang. Tugas pindah ke review setelah selesai, dan hasilnya tersimpan di tugas. Pakai wait=false untuk tugas panjang (koneksi remote memutus request setelah ±100 detik), lalu baca hasilnya dengan get_task.',
+    inputSchema: { id: z.string(), wait: z.boolean().default(true).describe('false agar langsung kembali tanpa menunggu hasil') },
+  }, tool(async ({ id, wait }: { id: string; wait: boolean }) => {
+    if (wait) return backend.runTask(id)
+    startInBackground(backend, id)
+    return { started: true, note: `Agen mulai mengerjakan tugas ${id}. Cek hasilnya dengan get_task.` }
+  }))
 
   server.registerTool('start_meeting', {
     title: 'Mulai rapat',
