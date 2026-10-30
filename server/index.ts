@@ -66,6 +66,26 @@ app.post('/api/claude/agents', (request, response) => {
   }
 })
 
+// Mirror mode: a claude.ai Project reports work it does itself, so its agent shows it in the office.
+app.post('/api/claude/activity', (request, response) => {
+  const body = request.body || {}
+  if (!body.agent || !['started', 'progress', 'done', 'failed'].includes(body.phase)) {
+    response.status(400).json({ error: 'agent dan phase (started, progress, done, failed) harus diisi.' })
+    return
+  }
+  try {
+    response.json(claudeService.reportActivity({
+      agent: String(body.agent),
+      phase: body.phase,
+      title: body.title ? String(body.title) : undefined,
+      detail: body.detail ? String(body.detail) : undefined,
+      activityId: body.activityId ? String(body.activityId) : undefined,
+    }))
+  } catch (error) {
+    response.status(400).json({ error: error instanceof Error ? error.message : String(error) })
+  }
+})
+
 app.delete('/api/claude/agents/:agentId', (request, response) => {
   try {
     response.json(claudeService.removeAgent(String(request.params.agentId)))

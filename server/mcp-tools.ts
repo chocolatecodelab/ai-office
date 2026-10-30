@@ -9,6 +9,7 @@ export interface Station { id: string; name: string; role: string; state: string
 export interface BoardTask { id: string; title: string; status: string; assignee?: string; priority?: number }
 export interface NewTask { title: string; description: string; assignee: string; priority: number }
 export interface OfficeAgent { id: string; name: string; role: string; department: string; description: string; project?: { name: string; url?: string; syncedAt: string } }
+export interface ActivityReport { agent: string; phase: 'started' | 'progress' | 'done' | 'failed'; title?: string; detail?: string; activityId?: string }
 export interface ProjectAgentInput { projectName: string; agentName?: string; role: string; description: string; instructions: string; knowledge?: string; projectUrl?: string }
 
 /** Where the tools read and change the office. */
@@ -16,6 +17,7 @@ export interface OfficeBackend {
   office(): Promise<{ stations: Station[]; summary: unknown }>
   agents(): Promise<OfficeAgent[]>
   registerProjectAgent(input: ProjectAgentInput): Promise<unknown>
+  reportActivity(input: ActivityReport): Promise<unknown>
   removeAgent(agentId: string): Promise<unknown>
   chat(agent: string, message: string): Promise<{ response: string; toolResults?: unknown[] }>
   tasks(): Promise<BoardTask[]>
@@ -98,6 +100,21 @@ Isi dari Project yang sedang aktif: instructions = instruksi Project (custom ins
     knowledge: args.knowledge,
     projectUrl: args.project_url,
   })))
+
+  server.registerTool('report_activity', {
+    title: 'Laporkan pekerjaan ke AI Office',
+    description: `Mode cermin: laporkan pekerjaan yang Anda kerjakan sendiri di Project ini ke AI Office, supaya agen Project ini terlihat bekerja di kantor dan hasilnya tercatat di Kanban.
+Panggil phase="started" di awal setiap pekerjaan (simpan activity_id yang dikembalikan), opsional phase="progress" untuk tahap penting, lalu phase="done" dengan ringkasan hasil (sebut nama file/artefak) atau phase="failed" dengan alasannya.
+agent = id agen dari list_agents, atau nama Project persis (misalnya "AI OFFICE - EVENT"). Tidak mengerjakan apa pun di office; pekerjaan tetap dilakukan di Project.`,
+    inputSchema: {
+      agent: agentId,
+      phase: z.enum(['started', 'progress', 'done', 'failed']),
+      title: z.string().optional().describe('Judul singkat pekerjaan; wajib untuk "started"'),
+      detail: z.string().optional().describe('started: rencana singkat; progress: tahap saat ini (pendek); done: ringkasan hasil; failed: alasan'),
+      activity_id: z.string().optional().describe('activity_id dari laporan "started"; wajib untuk progress, done, failed'),
+    },
+  }, tool(async ({ agent, phase, title, detail, activity_id }: { agent: string; phase: ActivityReport['phase']; title?: string; detail?: string; activity_id?: string }) =>
+    backend.reportActivity({ agent, phase, title, detail, activityId: activity_id })))
 
   server.registerTool('remove_agent', {
     title: 'Hapus agen',

@@ -150,7 +150,16 @@ export interface StoredTask {
   /** The agent's reply from the last run. */
   result?: string
   lastError?: string
+  /** 'mirror' when the work is done in a claude.ai Project and only reported to the office. */
+  source?: 'mirror'
+  /** Latest progress line reported for a mirrored task, shown as the agent's speech bubble. */
+  progress?: string
 }
+
+export type ActivityPhase = 'started' | 'progress' | 'done' | 'failed'
+
+// A mirrored task whose Project never reported back stops showing its agent at work after this long.
+const MIRROR_STALE_MS = 2 * 60 * 60 * 1000
 
 export interface ClaudeScheduledJob {
   id: string
@@ -561,6 +570,71 @@ Ikuti instruksi Project (bagian "ATURAN & PEDOMAN KERJA") dan gunakan knowledge 
     if (!existing) this.initAgentState(id)
     this.saveStorage()
     return { success: true, created: !existing, agent }
+  }
+
+  /** An agent by id, or by the name of the claude.ai Project it was registered from. */
+  public resolveAgent(idOrProject: string): AgentDefinition | undefined {
+    const key = idOrProject.trim().toLowerCase()
+    return CLAUDE_AGENTS.find((agent) => agent.id === key || agent.project?.name.toLowerCase() === key)
+  }
+
+  /**
+   * Mirror mode: a claude.ai Project reports work it is doing itself. "started" opens a running task
+   * (its agent shows as working in the office), "progress" updates the speech bubble, "done" stores the
+   * summary and moves the task to review, "failed" puts it back to todo with the error.
+   */
+  public reportActivity(input: { agent: string; phase: ActivityPhase; title?: string; detail?: string; activityId?: string }): { success: boolean; activityId: string; agent: string; status: string } {
+    const agent = this.resolveAgent(input.agent)
+    if (!agent) throw new Error(`Agen "${input.agent}" tidak ada. Agen yang tersedia: ${CLAUDE_AGENTS.map((item) => item.id).join(', ')}.`)
+    const now = new Date().toISOString()
+    const detail = (input.detail || '').trim()
+    let task = input.activityId ? this.tasks.find((item) => item.id === input.activityId) : undefined
+    if (input.activityId && !task) throw new Error(`Aktivitas ${input.activityId} tidak ditemukan.`)
+    if (!task) {
+      if (input.phase === 'progress') throw new Error('Laporan progress butuh activity_id dari laporan "started".')
+      if (!input.title?.trim()) throw new Error('title wajib diisi untuk aktivitas baru.')
+      task = {
+        id: `task-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        title: input.title.trim(),
+        description: `Dikerjakan di Project claude.ai "${agent.project?.name ?? agent.name}".${input.phase === 'started' && detail ? `
+
+${detail}` : ''}`,
+        status: 'running',
+        assignee: agent.id,
+        priority: 2,
+        createdAt: now,
+        updatedAt: now,
+        startedAt: now,
+        source: 'mirror',
+      }
+      this.tasks.unshift(task)
+    }
+    task.updatedAt = now
+    if (input.phase === 'started' || input.phase === 'progress') {
+      task.status = 'running'
+      if (input.phase === 'progress' && detail) task.progress = detail.slice(0, 120)
+    } else if (input.phase === 'done') {
+      task.status = 'review'
+      task.result = detail || 'Selesai dikerjakan di Project claude.ai.'
+      task.completedAt = now
+      task.progress = undefined
+      this.chatHistories.get(agent.id)?.push({
+        id: `msg-${Date.now()}`,
+        role: 'assistant',
+        content: `📋 **Dikerjakan di Project claude.ai: ${task.title}**
+
+${task.result}`,
+        timestamp: now,
+      })
+    } else {
+      task.status = 'todo'
+      task.lastError = detail || 'Gagal dikerjakan di Project claude.ai.'
+      task.progress = undefined
+    }
+    const state = this.agentStates.get(agent.id)
+    if (state) state.lastActive = now
+    this.saveStorage()
+    return { success: true, activityId: task.id, agent: agent.id, status: task.status }
   }
 
   /** Removes an agent (never the CEO). Its tasks and scheduled jobs move to the CEO. */
@@ -1340,9 +1414,10 @@ Halo! Saya **Creative Director & Video Editor**. Berikut konsep video yang saya 
     const stations: OfficeStation[] = CLAUDE_AGENTS.map((agent) => {
       const live = this.agentStates.get(agent.id)!
       // The office follows the board: an idle agent with a running task sits at its desk working on it.
-      const running = this.tasks.find((task) => task.assignee === agent.id && task.status === 'running')
+      const running = this.tasks.find((task) => task.assignee === agent.id && task.status === 'running' &&
+        (task.source !== 'mirror' || Date.now() - Date.parse(task.updatedAt) < MIRROR_STALE_MS))
       const s = live.state === 'Idle' && running && !this.isMeetingActive
-        ? { ...live, state: 'Working' as const, room: 'Workspace' as const, roomPosition: 'assigned-desk', currentTask: running.title, activity: `Mengerjakan: ${running.title}` }
+        ? { ...live, state: 'Working' as const, room: 'Workspace' as const, roomPosition: 'assigned-desk', currentTask: running.title, activity: running.progress || `Mengerjakan: ${running.title}` }
         : live
       return {
         id: agent.id,

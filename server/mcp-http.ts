@@ -225,6 +225,7 @@ const directBackend: OfficeBackend = {
   office: async () => claudeService.getOfficeSnapshot(),
   agents: async () => claudeService.getAgents(),
   registerProjectAgent: async (input) => claudeService.upsertProjectAgent(input),
+  reportActivity: async (input) => claudeService.reportActivity(input),
   removeAgent: async (agentId) => claudeService.removeAgent(agentId),
   chat: (agent, message) => claudeService.sendMessage(agent, message),
   tasks: async () => (claudeService.getTaskBoardSnapshot().tasks.data ?? []) as BoardTask[],

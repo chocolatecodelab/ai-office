@@ -74,6 +74,7 @@ const httpBackend: OfficeBackend = {
   office: () => api('/api/office'),
   agents: () => api('/api/claude/agents'),
   registerProjectAgent: (input) => api('/api/claude/agents', { method: 'POST', body: input }),
+  reportActivity: (input) => api('/api/claude/activity', { method: 'POST', body: input }),
   removeAgent: (agentId) => api(`/api/claude/agents/${encodeURIComponent(agentId)}`, { method: 'DELETE' }),
   chat,
   tasks: async () => (await api<{ tasks: { data?: BoardTask[] } }>('/api/tasks')).tasks.data ?? [],
