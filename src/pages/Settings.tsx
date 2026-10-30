@@ -148,7 +148,7 @@ function ClaudeSettings() {
         </span>
       </div>
       <p className="muted">
-        AI Office ini ditenagai langsung oleh model Claude (CEO Orchestrator, Marketing & Sales, Researcher, dan Creator Video Editor).
+        AI Office ini ditenagai langsung oleh model Claude (CEO Orchestrator dan satu agen untuk setiap Project Claude).
       </p>
 
       <form onSubmit={handleSave} style={{ display: 'grid', gap: '14px', marginTop: '16px' }}>

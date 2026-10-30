@@ -26,7 +26,7 @@ import type { OAuthClientInformationFull, OAuthTokens } from '@modelcontextproto
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 import { accessConfigDir } from './access.js'
 import { claudeService } from './claude-service.js'
-import { AGENT_IDS, createOfficeMcpServer, type BoardTask, type OfficeBackend } from './mcp-tools.js'
+import { createOfficeMcpServer, type BoardTask, type OfficeBackend } from './mcp-tools.js'
 
 const ACCESS_TOKEN_SECONDS = 60 * 60
 const REFRESH_TOKEN_SECONDS = 30 * 24 * 60 * 60
@@ -224,6 +224,8 @@ ${error ? `<p class="err">${escapeHtml(error)}</p>` : ''}
 const directBackend: OfficeBackend = {
   office: async () => claudeService.getOfficeSnapshot(),
   agents: async () => claudeService.getAgents(),
+  registerProjectAgent: async (input) => claudeService.upsertProjectAgent(input),
+  removeAgent: async (agentId) => claudeService.removeAgent(agentId),
   chat: (agent, message) => claudeService.sendMessage(agent, message),
   tasks: async () => (claudeService.getTaskBoardSnapshot().tasks.data ?? []) as BoardTask[],
   task: async (id) => {
@@ -231,7 +233,7 @@ const directBackend: OfficeBackend = {
     if (!detail) throw new Error(`Tugas ${id} tidak ditemukan.`)
     return detail
   },
-  createTask: async (task) => claudeService.addTask({ ...task, assignee: task.assignee as (typeof AGENT_IDS)[number] }),
+  createTask: async (task) => claudeService.addTask(task),
   updateTaskStatus: async (id, status) => claudeService.updateTaskStatus(id, status),
   runTask: (id) => claudeService.runTaskNow(id),
   meeting: async (active, agenda) => {
@@ -279,7 +281,15 @@ export function startRemoteMcp(host: string): void {
     }, result.error))
   })
 
-  app.use(mcpAuthRouter({ provider, issuerUrl: publicUrl, resourceServerUrl: mcpUrl, resourceName: 'AI Office' }))
+  app.use(mcpAuthRouter({
+    provider,
+    issuerUrl: publicUrl,
+    resourceServerUrl: mcpUrl,
+    resourceName: 'AI Office',
+    // Client secrets never expire: the SDK default (30 days) would silently break the
+    // claude.ai connector when it next refreshes its token. Revoking is done by deleting mcp-oauth.json.
+    clientRegistrationOptions: { clientSecretExpirySeconds: 0 },
+  }))
 
   const auth = requireBearerAuth({ verifier: provider, resourceMetadataUrl: getOAuthProtectedResourceMetadataUrl(mcpUrl) })
   // Stateless: every request gets its own server and transport.

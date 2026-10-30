@@ -12,10 +12,10 @@ export function Agents({ runtime, pending = false }: { runtime: RuntimeSnapshot 
   const states = new Map(office.status === 'ready' ? office.data.stations.map((station) => [station.id, station]) : [])
   const openCode = runtime.openCode.availability === 'available' ? runtime.openCode.data : undefined
   const cards = [
-    ...runtime.profiles.data.map((profile) => ({ id: profile.name, kind: 'Claude Agent Specialist', model: profile.model, gateway: profile.gateway })),
+    ...runtime.profiles.data.map((profile) => ({ id: profile.name, kind: states.get(profile.name)?.role || 'Claude Agent', model: profile.model, gateway: profile.gateway })),
     ...(openCode ? [{ id: 'opencode', kind: 'OpenCode (CLI tool)', model: openCode, gateway: undefined }] : []),
   ]
-  return <><PageTitle eyebrow="CREW" title="Agents">Daftar agen dan spesialis Claude AI Office yang aktif di kantor virtual: CEO Orchestrator, Marketing & Sales, Researcher, dan Creator (Video Editor).</PageTitle>
+  return <><PageTitle eyebrow="CREW" title="Agents">Daftar agen dan spesialis Claude AI Office yang aktif di kantor virtual: CEO sebagai orchestrator, dan satu agen untuk setiap Project Claude.</PageTitle>
     <section className="agent-grid">{cards.map((card) => {
       const station = states.get(card.id)
       return <article className="agent-card" key={card.id}>

@@ -3,17 +3,20 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 
-export const AGENT_IDS = ['ceo', 'marketing', 'researcher', 'creator'] as const
 export const TASK_STATUSES = ['todo', 'running', 'review', 'done'] as const
 
 export interface Station { id: string; name: string; role: string; state: string; currentTask?: string; activity?: string; room?: string }
 export interface BoardTask { id: string; title: string; status: string; assignee?: string; priority?: number }
 export interface NewTask { title: string; description: string; assignee: string; priority: number }
+export interface OfficeAgent { id: string; name: string; role: string; department: string; description: string; project?: { name: string; url?: string; syncedAt: string } }
+export interface ProjectAgentInput { projectName: string; agentName?: string; role: string; description: string; instructions: string; knowledge?: string; projectUrl?: string }
 
 /** Where the tools read and change the office. */
 export interface OfficeBackend {
   office(): Promise<{ stations: Station[]; summary: unknown }>
-  agents(): Promise<Array<{ id: string; name: string; role: string; department: string; description: string }>>
+  agents(): Promise<OfficeAgent[]>
+  registerProjectAgent(input: ProjectAgentInput): Promise<unknown>
+  removeAgent(agentId: string): Promise<unknown>
   chat(agent: string, message: string): Promise<{ response: string; toolResults?: unknown[] }>
   tasks(): Promise<BoardTask[]>
   task(id: string): Promise<unknown>
@@ -25,7 +28,13 @@ export interface OfficeBackend {
   jobs(): Promise<unknown>
 }
 
-const agentId = z.enum(AGENT_IDS).describe('Agent id: ceo (orchestrator), marketing, researcher or creator')
+// Agents change as Projects are registered, so ids are checked against the live crew instead of a fixed enum.
+const agentId = z.string().min(1).describe('Id agen dari list_agents, misalnya "ceo" (orchestrator) atau id agen sebuah Project')
+
+async function ensureAgent(backend: OfficeBackend, id: string): Promise<void> {
+  const agents = await backend.agents()
+  if (!agents.some((agent) => agent.id === id)) throw new Error(`Agen "${id}" tidak ada. Agen yang tersedia: ${agents.map((agent) => agent.id).join(', ')}.`)
+}
 
 const ok = (value: unknown) => ({ content: [{ type: 'text' as const, text: typeof value === 'string' ? value : JSON.stringify(value, null, 2) }] })
 
@@ -60,13 +69,44 @@ export function createOfficeMcpServer(backend: OfficeBackend): McpServer {
     description: 'Daftar agen AI Office beserta peran dan keahliannya.',
     inputSchema: {},
     annotations: { readOnlyHint: true },
-  }, tool(async () => (await backend.agents()).map(({ id, name, role, department, description }) => ({ id, name, role, department, description }))))
+  }, tool(async () => (await backend.agents()).map(({ id, name, role, department, description, project }) => ({ id, name, role, department, description, ...(project ? { project: project.name, syncedAt: project.syncedAt } : {}) }))))
+
+  server.registerTool('register_project_agent', {
+    title: 'Daftarkan Project sebagai agen',
+    description: `Buat atau perbarui agen AI Office yang mewakili satu Project Claude. Gunakan saat Pengguna meminta "daftarkan/sinkronkan Project ini ke AI Office".
+Isi dari Project yang sedang aktif: instructions = instruksi Project (custom instructions) apa adanya, knowledge = ringkasan padat isi file knowledge Project (fakta, data, aturan penting; boleh panjang). Mendaftarkan Project yang sama lagi akan memperbarui agennya, bukan membuat agen baru.`,
+    inputSchema: {
+      project_name: z.string().min(1).describe('Nama Project persis seperti di claude.ai'),
+      agent_name: z.string().optional().describe('Nama tampilan agen di kantor, default sama dengan nama Project'),
+      role: z.string().min(1).describe('Peran singkat agen, misalnya "Spesialis konten TikTok"'),
+      description: z.string().min(1).describe('Satu-dua kalimat tentang keahlian agen, dipakai CEO untuk memilih agen saat mendelegasikan'),
+      instructions: z.string().min(1).describe('Instruksi Project (custom instructions) apa adanya'),
+      knowledge: z.string().optional().describe('Ringkasan isi knowledge Project'),
+      project_url: z.string().optional().describe('URL Project di claude.ai, jika diketahui'),
+    },
+  }, tool(async (args: { project_name: string; agent_name?: string; role: string; description: string; instructions: string; knowledge?: string; project_url?: string }) => backend.registerProjectAgent({
+    projectName: args.project_name,
+    agentName: args.agent_name,
+    role: args.role,
+    description: args.description,
+    instructions: args.instructions,
+    knowledge: args.knowledge,
+    projectUrl: args.project_url,
+  })))
+
+  server.registerTool('remove_agent', {
+    title: 'Hapus agen',
+    description: 'Hapus satu agen dari AI Office beserta riwayat chat dan memorinya. Tugas dan jadwalnya dipindahkan ke CEO. CEO tidak bisa dihapus. Hanya jalankan jika Pengguna memintanya secara eksplisit.',
+    inputSchema: { agent: agentId },
+    annotations: { destructiveHint: true },
+  }, tool(async ({ agent }: { agent: string }) => backend.removeAgent(agent)))
 
   server.registerTool('chat_with_agent', {
     title: 'Chat dengan agen',
     description: 'Kirim pesan ke satu agen dan tunggu balasannya. Percakapan tersimpan di riwayat chat agen itu di AI Office. CEO bisa mendelegasikan tugas dan memanggil rapat sendiri.',
     inputSchema: { agent: agentId, message: z.string().min(1).describe('Pesan untuk agen') },
   }, tool(async ({ agent, message }: { agent: string; message: string }) => {
+    await ensureAgent(backend, agent)
     const result = await backend.chat(agent, message)
     return result.toolResults?.length ? `${result.response}\n\n[Aksi yang dijalankan agen]\n${JSON.stringify(result.toolResults, null, 2)}` : result.response
   }))
@@ -95,7 +135,10 @@ export function createOfficeMcpServer(backend: OfficeBackend): McpServer {
       assignee: agentId,
       priority: z.number().int().min(1).max(3).default(2).describe('1 rendah, 2 normal, 3 mendesak'),
     },
-  }, tool(async (args: NewTask) => backend.createTask(args)))
+  }, tool(async (args: NewTask) => {
+    await ensureAgent(backend, args.assignee)
+    return backend.createTask(args)
+  }))
 
   server.registerTool('update_task_status', {
     title: 'Ubah status tugas',
@@ -125,7 +168,10 @@ export function createOfficeMcpServer(backend: OfficeBackend): McpServer {
     title: 'Tambah memori agen',
     description: 'Simpan catatan ke memori jangka panjang agen. Catatan ini ikut dibaca di setiap chat berikutnya, cocok untuk memindahkan instruksi atau keputusan dari Project claude.ai.',
     inputSchema: { agent: agentId, note: z.string().min(1) },
-  }, tool(async ({ agent, note }: { agent: string; note: string }) => backend.addNote(agent, note)))
+  }, tool(async ({ agent, note }: { agent: string; note: string }) => {
+    await ensureAgent(backend, agent)
+    return backend.addNote(agent, note)
+  }))
 
   server.registerTool('list_scheduled_jobs', {
     title: 'Jadwal rutin',

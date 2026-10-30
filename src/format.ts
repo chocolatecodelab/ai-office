@@ -1,6 +1,8 @@
 const compact = new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 })
 const whole = new Intl.NumberFormat('en')
 
+import { knownAgentName } from './agent-directory.ts'
+
 export function formatCompact(value: number): string { return compact.format(value) }
 export function formatNumber(value: number): string { return whole.format(value) }
 
@@ -47,9 +49,5 @@ export function formatBytes(bytes: number): string {
 /** Display name for an agent. */
 export function agentLabel(profile: string | undefined): string {
   if (!profile) return 'Claude'
-  if (profile === 'ceo') return 'CEO'
-  if (profile === 'marketing') return 'Marketing & Sales'
-  if (profile === 'researcher') return 'Researcher'
-  if (profile === 'creator') return 'Creator (Video Editor)'
-  return profile
+  return knownAgentName(profile) ?? profile
 }

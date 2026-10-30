@@ -20,6 +20,23 @@ npm run dev      # atau: npm run build && npm start
 | `start_meeting`, `end_meeting` | Panggil atau bubarkan rapat di kantor 3D |
 | `add_agent_note` | Simpan catatan ke memori jangka panjang agen |
 | `list_scheduled_jobs` | Daftar jadwal rutin agen |
+| `register_project_agent` | Buat atau perbarui agen dari satu Project Claude |
+| `remove_agent` | Hapus agen (bukan CEO); tugas dan jadwalnya pindah ke CEO |
+
+## Satu agen per Project Claude
+
+Setiap Project di claude.ai bisa menjadi satu agen di office. CEO selalu ada sebagai orchestrator dan mendelegasikan pekerjaan ke agen Project yang sesuai.
+
+claude.ai tidak punya API untuk membaca Projects, jadi Project mendaftarkan dirinya sendiri lewat connector:
+
+1. Buka Project di claude.ai, mulai chat baru, dan pastikan connector **AI Office** aktif.
+2. Ketik: *"Daftarkan Project ini ke AI Office sebagai agen. Pakai instruksi Project apa adanya dan ringkas knowledge-nya."*
+3. Claude memanggil `register_project_agent`: instruksi Project menjadi aturan agen (`CLAUDE.md` di halaman Memory) dan ringkasan knowledge menjadi `PROJECT_KNOWLEDGE.md`.
+4. Ulangi untuk setiap Project. Mendaftarkan Project yang sama lagi akan **memperbarui** agennya. Jika knowledge tidak disertakan, knowledge yang lama tetap dipakai.
+
+Agen bawaan (Marketing, Researcher, Creator) bisa dihapus dengan meminta Claude: *"Hapus agen marketing, researcher, dan creator dari AI Office."*
+
+Jika tool baru belum muncul di claude.ai, buka **Settings → Connectors**, putuskan lalu sambungkan lagi connector AI Office, kemudian mulai chat baru.
 
 ## Claude Desktop
 

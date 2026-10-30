@@ -263,7 +263,7 @@ export function AgentChat({ station, onStationUpdated, onSwitchTab }: AgentChatP
     ceo: [
       'Tolong koordinasikan tim untuk proyek kampanye pemasaran produk baru.',
       'Panggil seluruh tim untuk rapat evaluasi strategi di ruang meeting.',
-      'Buatkan pembagian tugas untuk Marketing, Researcher, dan Creator.'
+      'Buatkan pembagian tugas untuk seluruh tim sesuai keahlian masing-masing.'
     ],
     marketing: [
       'Buatkan strategi positioning dan Unique Selling Proposition (USP) produk.',
@@ -282,7 +282,12 @@ export function AgentChat({ station, onStationUpdated, onSwitchTab }: AgentChatP
     ]
   }
 
-  const agentPrompts = quickPrompts[station.id] || quickPrompts.ceo
+  // Agents registered from a claude.ai Project have no tailored prompts.
+  const agentPrompts = quickPrompts[station.id] || [
+    'Apa saja yang bisa kamu kerjakan sesuai peranmu?',
+    'Buatkan rencana kerja minggu ini untuk Project ini.',
+    'Ringkas aturan kerja dan knowledge yang kamu pegang.'
+  ]
 
   return (
     <div className="agent-chat-container">

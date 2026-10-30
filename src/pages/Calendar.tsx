@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react'
 import { dayKey, monthEntries, type CalendarEntry } from '../cron-calendar.ts'
+import { useCrew } from '../agent-directory.ts'
 import { agentLabel, formatDateTime } from '../format.ts'
 import { usePolling } from '../polling.ts'
 import type { CalendarSnapshot, ScheduledJob } from '../types.ts'
@@ -87,7 +88,8 @@ export function Calendar() {
 
   // Form states
   const [name, setName] = useState('')
-  const [agent, setAgent] = useState<'ceo' | 'marketing' | 'researcher' | 'creator'>('ceo')
+  const crew = useCrew()
+  const [agent, setAgent] = useState('ceo')
   const [preset, setPreset] = useState(PRESET_SCHEDULES[1].cron)
   const [customCron, setCustomCron] = useState('0 9 * * 1-5')
   const [description, setDescription] = useState('')
@@ -336,13 +338,10 @@ export function Calendar() {
                   </label>
                   <select
                     value={agent}
-                    onChange={(e) => setAgent(e.target.value as any)}
+                    onChange={(e) => setAgent(e.target.value)}
                     style={{ width: '100%', padding: '8px 10px', background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--text)' }}
                   >
-                    <option value="ceo">CEO (Orchestrator)</option>
-                    <option value="marketing">Marketing & Sales</option>
-                    <option value="researcher">Researcher</option>
-                    <option value="creator">Creator (Video Editor)</option>
+                    {crew.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
                   </select>
                 </div>
 

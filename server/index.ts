@@ -44,6 +44,36 @@ app.get('/api/claude/agents', (_request, response) => {
   response.json(claudeService.getAgents())
 })
 
+// One agent per claude.ai Project: create or update it from the Project's instructions and knowledge.
+app.post('/api/claude/agents', (request, response) => {
+  const body = request.body || {}
+  if (!body.projectName || !body.role || !body.instructions) {
+    response.status(400).json({ error: 'projectName, role dan instructions harus diisi.' })
+    return
+  }
+  try {
+    response.json(claudeService.upsertProjectAgent({
+      projectName: String(body.projectName),
+      agentName: body.agentName ? String(body.agentName) : undefined,
+      role: String(body.role),
+      description: String(body.description || ''),
+      instructions: String(body.instructions),
+      knowledge: body.knowledge ? String(body.knowledge) : undefined,
+      projectUrl: body.projectUrl ? String(body.projectUrl) : undefined,
+    }))
+  } catch (error) {
+    response.status(400).json({ error: error instanceof Error ? error.message : String(error) })
+  }
+})
+
+app.delete('/api/claude/agents/:agentId', (request, response) => {
+  try {
+    response.json(claudeService.removeAgent(String(request.params.agentId)))
+  } catch (error) {
+    response.status(400).json({ error: error instanceof Error ? error.message : String(error) })
+  }
+})
+
 app.get('/api/chat/:agentId/history', (request, response) => {
   response.json({
     agentId: request.params.agentId,

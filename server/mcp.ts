@@ -73,6 +73,8 @@ async function chat(agent: string, message: string): Promise<{ response: string;
 const httpBackend: OfficeBackend = {
   office: () => api('/api/office'),
   agents: () => api('/api/claude/agents'),
+  registerProjectAgent: (input) => api('/api/claude/agents', { method: 'POST', body: input }),
+  removeAgent: (agentId) => api(`/api/claude/agents/${encodeURIComponent(agentId)}`, { method: 'DELETE' }),
   chat,
   tasks: async () => (await api<{ tasks: { data?: BoardTask[] } }>('/api/tasks')).tasks.data ?? [],
   task: (id) => api(`/api/tasks/${encodeURIComponent(id)}`),

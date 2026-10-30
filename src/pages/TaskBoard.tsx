@@ -1,4 +1,5 @@
 import { Component, useEffect, useRef, useState, type ErrorInfo, type ReactNode } from 'react'
+import { useCrew } from '../agent-directory.ts'
 import { formatDateTime, orderedStatuses, statusTone } from '../format.ts'
 import { usePolling } from '../polling.ts'
 import { loadSnapshot, type RequestState } from '../request-state.ts'
@@ -274,7 +275,8 @@ export function TaskDetailDialog({
 export function CreateTaskDialog({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
   const [title, setTitle] = useState('')
   const [body, setBody] = useState('')
-  const [assignee, setAssignee] = useState('creator')
+  const crew = useCrew()
+  const [assignee, setAssignee] = useState('ceo')
   const [priority, setPriority] = useState(1)
   const [status, setStatus] = useState('todo')
   const [submitting, setSubmitting] = useState(false)
@@ -366,10 +368,7 @@ export function CreateTaskDialog({ onClose, onCreated }: { onClose: () => void; 
               value={assignee}
               onChange={(e) => setAssignee(e.target.value)}
             >
-              <option value="creator">Creator (Video & Visual Pipeline)</option>
-              <option value="researcher">Researcher (Riset & Analisis Pasar)</option>
-              <option value="marketing">Marketing (Copywriting & Promosi)</option>
-              <option value="ceo">CEO (Orchestrator & Supervisi)</option>
+              {crew.map((item) => <option key={item.id} value={item.id}>{item.name} ({item.role})</option>)}
               <option value="unassigned">(Unassigned)</option>
             </select>
           </div>

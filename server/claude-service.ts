@@ -21,7 +21,7 @@ export function normalizeModel(model: string | undefined): string {
 }
 
 export interface AgentDefinition {
-  id: 'ceo' | 'marketing' | 'researcher' | 'creator'
+  id: string
   name: string
   role: string
   department: string
@@ -29,28 +29,43 @@ export interface AgentDefinition {
   seat: number
   systemPrompt: string
   description: string
+  /** The claude.ai Project this agent was created from, when it was registered through MCP. */
+  project?: { name: string; url?: string; syncedAt: string }
 }
 
-export const CLAUDE_AGENTS: AgentDefinition[] = [
-  {
-    id: 'ceo',
-    name: 'CEO (Claude Orchestrator)',
-    role: 'Chief Executive Officer',
-    department: 'Executive',
-    model: DEFAULT_MODEL,
-    seat: 1,
-    description: 'Menerima tugas dari user, menganalisis strategi, dan mendelegasikan tugas ke Marketing, Researcher, & Creator.',
-    systemPrompt: `Anda adalah CEO dan Orchestrator di AI Office virtual ini. 
+export const CEO_ID = 'ceo'
+const MAX_INSTRUCTIONS = 20_000
+const MAX_KNOWLEDGE = 30_000
+const PROJECT_KNOWLEDGE_FILE = 'PROJECT_KNOWLEDGE.md'
+
+/** The orchestrator is always present and always built from this code, so prompt changes apply to saved offices. */
+const CEO_AGENT: AgentDefinition = {
+  id: CEO_ID,
+  name: 'CEO (Claude Orchestrator)',
+  role: 'Chief Executive Officer',
+  department: 'Executive',
+  model: DEFAULT_MODEL,
+  seat: 1,
+  description: 'Menerima tugas dari user, menganalisis strategi, dan mendelegasikan tugas ke agen yang paling sesuai.',
+  systemPrompt: `Anda adalah CEO dan Orchestrator di AI Office virtual ini.
 Peran utama Anda adalah:
 1. Menerima instruksi, visi, dan proyek dari Pengguna (Owner).
 2. Membedah proyek besar menjadi subtugas yang jelas dan terarah.
-3. Mendelegasikan tugas kepada anggota tim Anda:
-   - Marketing & Sales (id: marketing): Riset pasar, strategi go-to-market, copywriting, dan penjualan.
-   - Researcher (id: researcher): Penggalian informasi mendalam, data industri, analisis kompetitor, dan laporan riset.
-   - Creator (id: creator): Konsep konten kreatif, naskah/script video, hook 3 detik, storyboard, dan arahan editing video dari footage.
+3. Mendelegasikan tugas kepada anggota tim yang keahliannya paling cocok. Daftar lengkap anggota tim beserta id dan perannya ada di bagian "Informasi Ruang Kantor & Tim". Banyak anggota tim mewakili satu Project Claude milik Pengguna; delegasikan pekerjaan sebuah Project ke agen Project itu.
 4. Anda memiliki alat (tool) 'delegate_task' dan 'call_team_meeting'. Gunakan alat ini ketika pengguna meminta eksekusi tugas atau rapat tim!
-5. Selalu bersikap profesional, visioner, tegas, solutif, dan ramah dalam bahasa Indonesia.`
-  },
+5. Selalu bersikap profesional, visioner, tegas, solutif, dan ramah dalam bahasa Indonesia.`,
+}
+
+/** Lowercase, dash-separated id from a Project name, for example "Toko Kopi Online" → "toko-kopi-online". */
+export function agentIdFromName(name: string): string {
+  const slug = name.normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40)
+  return slug && slug !== CEO_ID ? slug : `project-${Date.now().toString(36)}`
+}
+
+// The live crew. It is mutated in place (loaded from storage, Projects added or removed), so every
+// module that imported it sees the current list.
+export const CLAUDE_AGENTS: AgentDefinition[] = [
+  CEO_AGENT,
   {
     id: 'marketing',
     name: 'Marketing & Sales',
@@ -126,7 +141,7 @@ export interface StoredTask {
   title: string
   description: string
   status: 'todo' | 'running' | 'review' | 'done'
-  assignee: 'ceo' | 'marketing' | 'researcher' | 'creator'
+  assignee: string
   priority: number
   createdAt: string
   updatedAt: string
@@ -135,7 +150,7 @@ export interface StoredTask {
 export interface ClaudeScheduledJob {
   id: string
   name: string
-  agent: 'ceo' | 'marketing' | 'researcher' | 'creator'
+  agent: string
   schedule: string
   description: string
   prompt?: string
@@ -261,6 +276,11 @@ class ClaudeOfficeService {
         const data = JSON.parse(readFileSync(this.storageFile, 'utf8'))
         if (data.config?.apiKey) this.config.apiKey = data.config.apiKey
         if (data.config?.defaultModel) this.config.defaultModel = normalizeModel(data.config.defaultModel)
+        // Offices saved before agents were stored keep the built-in crew.
+        if (Array.isArray(data.agents)) {
+          const saved = (data.agents as AgentDefinition[]).filter((agent) => agent?.id && agent.id !== CEO_ID)
+          CLAUDE_AGENTS.splice(0, CLAUDE_AGENTS.length, CEO_AGENT, ...saved)
+        }
         if (Array.isArray(data.tasks)) this.tasks = data.tasks
         if (Array.isArray(data.scheduledJobs)) this.scheduledJobs = data.scheduledJobs
         if (data.chatHistories && typeof data.chatHistories === 'object') {
@@ -287,6 +307,7 @@ class ClaudeOfficeService {
       }
       const data = {
         config: this.config,
+        agents: CLAUDE_AGENTS.filter((agent) => agent.id !== CEO_ID),
         tasks: this.tasks,
         scheduledJobs: this.scheduledJobs,
         chatHistories: Object.fromEntries(this.chatHistories.entries()),
@@ -299,22 +320,24 @@ class ClaudeOfficeService {
     }
   }
 
-  private initAgents() {
-    for (const agent of CLAUDE_AGENTS) {
-      if (!this.chatHistories.has(agent.id)) {
-        this.chatHistories.set(agent.id, [])
-      }
-      // Ensure memory defaults are initialized
-      this.getAgentMemory(agent.id)
-      this.agentStates.set(agent.id, {
-        state: 'Idle',
-        activity: '',
-        currentTask: '',
-        room: 'Lounge',
-        roomPosition: 'lounge-seat',
-        lastActive: new Date().toISOString()
-      })
+  private initAgentState(agentId: string) {
+    if (!this.chatHistories.has(agentId)) {
+      this.chatHistories.set(agentId, [])
     }
+    // Ensure memory defaults are initialized
+    this.getAgentMemory(agentId)
+    this.agentStates.set(agentId, {
+      state: 'Idle',
+      activity: '',
+      currentTask: '',
+      room: 'Lounge',
+      roomPosition: 'lounge-seat',
+      lastActive: new Date().toISOString()
+    })
+  }
+
+  private initAgents() {
+    for (const agent of CLAUDE_AGENTS) this.initAgentState(agent.id)
 
     if (this.tasks.length === 0) {
       this.tasks = [
@@ -480,6 +503,77 @@ class ClaudeOfficeService {
 
   public getAgents(): AgentDefinition[] {
     return CLAUDE_AGENTS
+  }
+
+  /**
+   * Creates or updates the agent of one claude.ai Project. The Project's instructions become the
+   * agent's rules and its knowledge a context file; registering the same Project again updates it.
+   */
+  public upsertProjectAgent(input: {
+    projectName: string
+    agentName?: string
+    role: string
+    description: string
+    instructions: string
+    knowledge?: string
+    projectUrl?: string
+  }): { success: boolean; created: boolean; agent: AgentDefinition } {
+    const projectName = input.projectName.trim()
+    const existing = CLAUDE_AGENTS.find((agent) => agent.id !== CEO_ID && agent.project?.name.toLowerCase() === projectName.toLowerCase())
+    const id = existing?.id ?? agentIdFromName(projectName)
+    if (!existing && CLAUDE_AGENTS.some((agent) => agent.id === id)) {
+      throw new Error(`Id agen "${id}" sudah dipakai agen lain. Hapus agen itu dulu atau pakai nama Project yang berbeda.`)
+    }
+    const instructions = input.instructions.trim().slice(0, MAX_INSTRUCTIONS)
+    const name = (input.agentName || projectName).trim()
+    const agent: AgentDefinition = {
+      id,
+      name,
+      role: input.role.trim(),
+      department: 'Project',
+      model: this.config.defaultModel,
+      seat: existing?.seat ?? Math.max(0, ...CLAUDE_AGENTS.map((item) => item.seat)) + 1,
+      description: input.description.trim(),
+      systemPrompt: `Anda adalah ${name}, agen AI Office yang mewakili Project Claude "${projectName}" milik Pengguna.
+Peran Anda: ${input.role.trim()}.
+${input.description.trim()}
+
+Ikuti instruksi Project (bagian "ATURAN & PEDOMAN KERJA") dan gunakan knowledge Project (bagian "DOKUMEN KONTEKS") sebagai sumber utama. Jawab dalam bahasa yang dipakai Pengguna.`,
+      project: { name: projectName, url: input.projectUrl?.trim() || existing?.project?.url, syncedAt: new Date().toISOString() },
+    }
+    if (existing) CLAUDE_AGENTS[CLAUDE_AGENTS.indexOf(existing)] = agent
+    else CLAUDE_AGENTS.push(agent)
+
+    const memory = existing ? this.getAgentMemory(id) : { workspacePath: this.getAgentWorkspace(CEO_ID), claudeRules: '', notes: [], contextFiles: [] }
+    memory.claudeRules = instructions
+    // A re-sync without knowledge keeps what an earlier sync stored.
+    const knowledge = (input.knowledge || '').trim().slice(0, MAX_KNOWLEDGE)
+    if (knowledge) {
+      memory.contextFiles = memory.contextFiles.filter((file) => file.name !== PROJECT_KNOWLEDGE_FILE)
+      memory.contextFiles.unshift({ name: PROJECT_KNOWLEDGE_FILE, path: `claude.ai/project/${id}`, size: knowledge.length, content: knowledge })
+    }
+    this.agentMemories.set(id, memory)
+    if (!existing) this.initAgentState(id)
+    this.saveStorage()
+    return { success: true, created: !existing, agent }
+  }
+
+  /** Removes an agent (never the CEO). Its tasks and scheduled jobs move to the CEO. */
+  public removeAgent(agentId: string): { success: boolean; message: string } {
+    if (agentId === CEO_ID) throw new Error('CEO tidak bisa dihapus.')
+    const index = CLAUDE_AGENTS.findIndex((agent) => agent.id === agentId)
+    if (index < 0) throw new Error(`Agen ${agentId} tidak ditemukan.`)
+    const [removed] = CLAUDE_AGENTS.splice(index, 1)
+    let moved = 0
+    for (const item of [...this.tasks, ...this.scheduledJobs]) {
+      if ('assignee' in item && item.assignee === agentId) { item.assignee = CEO_ID; moved += 1 }
+      if ('agent' in item && item.agent === agentId) { item.agent = CEO_ID; moved += 1 }
+    }
+    this.chatHistories.delete(agentId)
+    this.agentMemories.delete(agentId)
+    this.agentStates.delete(agentId)
+    this.saveStorage()
+    return { success: true, message: `Agen ${removed.name} dihapus.${moved ? ` ${moved} tugas/jadwal dipindahkan ke CEO.` : ''}` }
   }
 
   public getHistory(agentId: string): ChatMessage[] {
@@ -824,17 +918,18 @@ Format balasan gunakan Markdown yang rapi dengan heading, bullet points, dan pen
 
     // Prepare tools for CEO or agents
     const tools: Anthropic.Tool[] = []
-    if (agentId === 'ceo') {
+    // With no other agents there is nobody to delegate to or meet with.
+    if (agentId === CEO_ID && CLAUDE_AGENTS.length > 1) {
       tools.push(
         {
           name: 'delegate_task',
-          description: 'Mendelegasikan tugas baru kepada agen bawahan (marketing, researcher, atau creator) dan menambahkannya ke Kanban board.',
+          description: 'Mendelegasikan tugas baru kepada salah satu anggota tim (lihat daftar tim) dan menambahkannya ke Kanban board.',
           input_schema: {
             type: 'object',
             properties: {
               target_agent: {
                 type: 'string',
-                enum: ['marketing', 'researcher', 'creator'],
+                enum: CLAUDE_AGENTS.filter((a) => a.id !== CEO_ID).map((a) => a.id),
                 description: 'ID agen tujuan penerima tugas'
               },
               task_title: {
@@ -1075,7 +1170,7 @@ Format balasan gunakan Markdown yang rapi dengan heading, bullet points, dan pen
 
 Halo! Sebagai **CEO (Claude 5.5 Orchestrator)**, saya telah memanggil seluruh tim ke ruang rapat utama!
 
-👥 **Status Rapat:** Seluruh tim (Marketing & Sales, Researcher, dan Creator) sekarang berkumpul di ruang rapat untuk membahas agenda:
+👥 **Status Rapat:** Seluruh tim sekarang berkumpul di ruang rapat untuk membahas agenda:
 > **"${userText}"**
 
 Anda dapat melihat seluruh avatar kami berjalan dan berkumpul di meja rapat di kantor 3D! Apa arahan selanjutnya yang ingin Anda berikan?`
@@ -1178,12 +1273,15 @@ Halo! Saya **Creative Director & Video Editor**. Berikut konsep video yang saya 
 
   private async handleToolCall(name: string, args: any): Promise<any> {
     if (name === 'delegate_task') {
+      if (!CLAUDE_AGENTS.some((a) => a.id === args.target_agent && a.id !== CEO_ID)) {
+        return { success: false, error: `Agen ${args.target_agent} tidak ada di tim.` }
+      }
       const newTask: StoredTask = {
         id: `task-${Date.now()}`,
         title: args.task_title || 'Tugas Baru',
         description: args.task_description || '',
         status: 'running',
-        assignee: args.target_agent || 'marketing',
+        assignee: args.target_agent,
         priority: args.priority || 2,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
@@ -1521,7 +1619,7 @@ Halo! Saya **Creative Director & Video Editor**. Berikut konsep video yang saya 
   }
 
   public addScheduledJob(data: Partial<ClaudeScheduledJob>): { success: boolean; job: ClaudeScheduledJob } {
-    const agent = (data.agent || 'ceo') as 'ceo' | 'marketing' | 'researcher' | 'creator'
+    const agent = String(data.agent || 'ceo')
     const schedule = (data.schedule || '0 9 * * *').trim()
     const newJob: ClaudeScheduledJob = {
       id: `cron-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
