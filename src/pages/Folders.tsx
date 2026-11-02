@@ -5,7 +5,7 @@ import { usePolling } from '../polling.ts'
 import type { RequestState } from '../request-state.ts'
 import type { FolderAgent, FolderAgentsSnapshot, FolderFile, FolderListing } from '../types.ts'
 import { EmptyState, LoadingState, PageTitle, SearchInput, SourceStatus, Unavailable } from '../ui.tsx'
-import { PixelCharacter } from './Office.tsx'
+import { PixelCharacter } from './OfficeDetails.tsx'
 import { PrivateGate } from '../ProfileLock.tsx'
 import { agentPrivacy, useProfileLock } from '../profile-lock.ts'
 

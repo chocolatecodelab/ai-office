@@ -65,8 +65,12 @@ export async function runTask(deps: RunnerDeps, brandId: string, taskId: string)
   }
 
   try {
-    const instructions = agentInstructions(deps.contextDir, task.agentType, brandId, await deps.brandName(brandId))
-    const input = taskInput(running, await store.revisionNotes(brandId, taskId))
+    const instructions = agentInstructions(deps.contextDir, task.agentType, brandId, await deps.brandName(brandId), task.kind === 'konten.chat')
+    let input = taskInput(running, await store.revisionNotes(brandId, taskId))
+    if (task.kind === 'konten.chat') {
+      const history = (await store.tasks(brandId)).filter(item => item.agentType === task.agentType && item.kind === 'konten.chat' && item.id !== task.id && item.createdAt < task.createdAt && item.result).slice(0,10).reverse()
+      input = `Percakapan dengan pengguna. Jawab pesan terbaru sesuai peran; boleh meminta klarifikasi. Hasil belum merupakan izin publikasi atau aksi eksternal.\n\n${history.map(item => `Pengguna: ${item.brief.slice(0,6000)}\nAgent: ${item.result!.slice(0,10000)}`).join('\n\n')}\n\nPesan terbaru: ${input}`
+    }
     const result = await deps.hermes.run(endpoint, {
       input, instructions, sessionId: `task-${taskId}`,
       model: route.model, provider: route.provider, reasoningEffort: route.reasoningEffort,

@@ -1,52 +1,55 @@
 // @vitest-environment jsdom
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, expect, it, vi } from 'vitest'
 import { Office } from './pages/Office.tsx'
-import type { ActivitySnapshot, ChannelSnapshot, OfficeSnapshot } from './types.ts'
+import type { OfficeBrand } from './office-api.ts'
 
-const testEnvironment = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }
-testEnvironment.IS_REACT_ACT_ENVIRONMENT = true
-
-const office: OfficeSnapshot = {
-  stations: [{ id: 'default', name: 'default', role: 'Hermes profile', room: 'Workspace', roomPosition: 'assigned-desk', state: 'Working', currentTask: 'Review focus behavior', recentActivity: 'No attributed recent activity', activity: 'Kanban: Review focus behavior', seat: 1, provenance: 'Test evidence', freshness: 'Current' }],
-  summary: { declared: 1, active: 1, idle: 0, offline: 0, unknown: 0, gatewaysReachable: 1, gatewaysDeclared: 1 }, fetchedAt: '2026-09-27T12:00:00.000Z',
+;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+class Socket {
+  static instances: Socket[] = []
+  onmessage?: () => void
+  onopen?: () => void
+  onclose?: () => void
+  constructor(public url: string) { Socket.instances.push(this) }
+  close() {}
 }
-const activity: ActivitySnapshot = { sessions: { availability: 'available', data: [] }, fetchedAt: office.fetchedAt }
-const channels: ChannelSnapshot = { channels: { availability: 'available', data: [] }, fetchedAt: office.fetchedAt }
-
-afterEach(() => { vi.unstubAllGlobals(); document.body.replaceChildren() })
-
-describe('Office detail dialog focus', () => {
-  it('contains Tab navigation and restores the station trigger after Escape closes it', async () => {
-    vi.stubGlobal('fetch', vi.fn((path: string) => Promise.resolve(new Response(JSON.stringify(path === '/api/office' ? office : path === '/api/activity' ? activity : channels)))))
-    const host = document.body.appendChild(document.createElement('div'))
-    const root = createRoot(host)
-
-    await act(async () => { root.render(<Office/>); await Promise.resolve() })
-    const trigger = document.querySelector<HTMLButtonElement>('[aria-label^="default"]')!
-    await act(async () => { trigger.click() })
-    const close = document.querySelector<HTMLButtonElement>('.office-close')!
-    const tabs = [...document.querySelectorAll<HTMLButtonElement>('.detail-tabs button')]
-    expect(tabs.map((tab) => tab.textContent)).toEqual(['Chat', 'Overview', 'Folder', 'Memory'])
-    // On Overview the last focusable control is the last tab (Chat ends with its message box).
-    await act(async () => { tabs[1].click() })
-    const last = tabs[tabs.length - 1]
-    // Tab from the last control wraps to the first (Close); Shift+Tab from Close wraps back.
-    last.focus()
-    const tab = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true })
-    await act(async () => { last.dispatchEvent(tab) })
-    expect(tab.defaultPrevented).toBe(true)
-    expect(document.activeElement).toBe(close)
-
-    const shiftTab = new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true })
-    await act(async () => { close.dispatchEvent(shiftTab) })
-    expect(shiftTab.defaultPrevented).toBe(true)
-    expect(document.activeElement).toBe(last)
-    close.focus()
-
-    await act(async () => { close.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })) })
-    expect(document.activeElement).toBe(trigger)
-    await act(async () => { root.unmount() })
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); Socket.instances = []; document.body.replaceChildren() })
+it('uses the office API, falls back to 2D and refreshes statuses on a brand event without moving floors', async () => {
+  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null)
+  vi.stubGlobal('WebSocket', Socket)
+  let brands: OfficeBrand[] = [{ id: 'otca', name: 'Official OTCA', color: '#CB9D31', paused: false,
+    agents: [{ brandId: 'otca', agentType: 'manager', active: true, paused: false, status: 'working', currentTask: 'Rencana event' }],
+    summary: { queued: 2, approvals: 0, waitingQuota: 0 } }]
+  const fetcher = vi.fn((path: string) => {
+    expect(path).toBe('/api/office/brands')
+    return Promise.resolve(new Response(JSON.stringify(brands)))
   })
+  vi.stubGlobal('fetch', fetcher)
+  const host = document.body.appendChild(document.createElement('div'))
+  const root = createRoot(host)
+  try {
+    await act(async () => { root.render(<Office/>); await Promise.resolve() })
+    expect(fetcher.mock.calls.length).toBe(1)
+    expect(host.textContent).toContain('Rencana event')
+    expect(host.textContent).toContain('Antre: 2')
+    expect(host.querySelector('canvas')).toBeNull()
+    expect(host.querySelector<HTMLSelectElement>('[aria-label="Kualitas grafis"]')?.disabled).toBe(true)
+    expect([...host.querySelectorAll('button')].find(b=>b.textContent==='Reset kamera')?.disabled).toBe(true)
+    expect(Socket.instances[0].url).toContain('/api/office/ws?brand=otca')
+    brands = [{ ...brands[0], agents: [{ ...brands[0].agents[0], status: 'waiting_quota', currentTask: null }], summary: { queued: 0, approvals: 0, waitingQuota: 1 } }]
+    await act(async () => { Socket.instances[0].onmessage?.(); await Promise.resolve() })
+    expect(host.textContent).toContain('Tidur (kuota)')
+    expect(host.textContent).toContain('Menunggu kuota: 1')
+    expect(host.querySelector('[aria-label="Lantai kantor"] [aria-pressed="true"]')?.textContent).toContain('Official OTCA')
+    expect(fetcher.mock.calls.every((args) => String(args[0]).startsWith('/api/office/brands'))).toBe(true)
+    const reads = fetcher.mock.calls.length
+    await act(async () => { [...host.querySelectorAll('button')].find((button) => button.textContent === 'G · Bersama')!.click() })
+    expect(host.querySelectorAll('.room-control-grid article')).toHaveLength(6)
+    await act(async () => { host.querySelector<HTMLButtonElement>('[aria-label="Gym & Fitness: jeda"]')!.click() })
+    expect(host.querySelector('[aria-label="Gym & Fitness: mulai"]')?.getAttribute('aria-pressed')).toBe('false')
+    await act(async () => { [...host.querySelectorAll('button')].find((button) => button.textContent === 'Ganti latihan')!.click() })
+    expect(host.textContent).toContain('Cardio')
+    expect(fetcher.mock.calls.length).toBe(reads)
+  } finally { await act(async () => root.unmount()) }
 })

@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
-import { OfficeDetail } from './pages/Office.tsx'
+import { OfficeDetail } from './pages/OfficeDetails.tsx'
 import type { OfficeStation } from './types.ts'
 
 describe('OfficeDetail', () => {

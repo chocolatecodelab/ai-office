@@ -3,7 +3,7 @@ import express, { type Request, type Response, type Router } from 'express'
 import { WebSocketServer } from 'ws'
 import { createDb, migrate, type Db } from '../db/index.js'
 import { integrationStatuses, mockDrive, type Integrations } from '../integrations/index.js'
-import { findContextDir } from '../otca-context.js'
+import { agentContextFiles, findContextDir } from '../otca-context.js'
 import { officeSettings, type OfficeSettings } from '../settings.js'
 import { APPROVERS } from './approval-routes.js'
 import { readBrands, syncBrands } from './brands.js'
@@ -89,12 +89,37 @@ export function officeRouter(services: Promise<OfficeServices>): Router {
     stages: EVENT_STAGES.map(({ id, label, level, agentType, requires }) => ({ id, label, level, agentType, requires })),
   })))
 
-  router.get('/brands', handle(async (office) => Promise.all((await office.store.brands()).map(async (brand) => ({ ...brand, agents: await office.store.agents(brand.id) })))))
+  router.get('/brands', handle(async (office) => Promise.all((await office.store.brands()).map(async (brand) => {
+    const [agents, summary] = await Promise.all([office.store.agents(brand.id), office.store.summary(brand.id)])
+    return { ...brand, agents, summary }
+  }))))
 
   router.get('/brands/:brand/tasks', handle(async (office, request) => {
     const status = text(request.query.status)
     if (status && !TASK_STATUSES.includes(status as TaskStatus)) throw new Error(`Status ${status} tidak dikenal.`)
     return office.store.tasks(await brandOf(office, request), { status: status as TaskStatus | undefined })
+  }))
+
+  const agentOf = async (office: OfficeServices, request: Request) => {
+    const brand = await brandOf(office, request)
+    const agent = String(request.params.agent)
+    if (!(await office.store.agents(brand)).some(item => item.agentType === agent && item.active)) throw new Error('Agent tidak aktif di brand ini.')
+    return { brand, agent }
+  }
+  router.get('/brands/:brand/agents/:agent/context', handle(async (office, request) => {
+    const { brand, agent } = await agentOf(office, request)
+    const dir = findContextDir()
+    if (!dir) throw new Error('Konteks resmi belum tersedia.')
+    return agentContextFiles(dir, agent, brand) ?? []
+  }))
+  router.post('/brands/:brand/agents/:agent/chat', handle(async (office, request) => {
+    const { brand, agent } = await agentOf(office, request)
+    const message = text(body(request).message)?.trim()
+    if (!message || message.length > 12000) throw new Error('Pesan harus berisi 1–12000 karakter.')
+    // Chat stays on the durable queue: quota, task status, audit and approval keep working.
+    const task = await office.store.createTask(brand, { agentType: agent, kind: 'konten.chat', title: message.slice(0,100), brief: message, createdBy: LOCAL_ACTOR })
+    await office.queue.enqueue(task)
+    return task
   }))
 
   router.get('/brands/:brand/tasks/:id', handle(async (office, request) => {
@@ -130,7 +155,7 @@ export function officeRouter(services: Promise<OfficeServices>): Router {
   router.get('/brands/:brand/approvals', handle(async (office, request) => {
     const brandId = await brandOf(office, request)
     const approvals = await office.store.approvals(brandId, { open: request.query.open === '1' })
-    return Promise.all(approvals.map(async (approval) => ({ ...approval, approver: APPROVERS[approval.approvalType], task: await office.store.task(brandId, approval.taskId) })))
+    return Promise.all(approvals.map(async (approval) => ({ ...approval, approver: APPROVERS[approval.approvalType], qc: approval.decision===null ? await office.store.latestContentQc(brandId,approval.taskId) : undefined, task: await office.store.task(brandId, approval.taskId) })))
   }))
 
   router.post('/brands/:brand/approvals/:id', handle(async (office, request) => {

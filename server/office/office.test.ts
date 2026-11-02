@@ -78,6 +78,8 @@ describe.skipIf(!available)('office store, runner and event workflow (Postgres)'
     expect(hermes.requests[0]).toMatchObject({ reasoningEffort: 'high', sessionId: `task-${task.id}` })
     expect(hermes.requests[0].provider).toBeUndefined() // Codex, the container default
     const [approval] = await store.approvals('otca', { open: true })
+    expect(await store.summary('otca')).toEqual({ queued: 0, approvals: 1, waitingQuota: 0 })
+    expect(await store.summary('infojerman')).toEqual({ queued: 0, approvals: 0, waitingQuota: 0 })
     expect(approval).toMatchObject({ taskId: task.id, approvalType: 'event' })
     expect((await store.agents('otca')).find((agent) => agent.agentType === 'event-specialist')?.status).toBe('waiting_approval')
 
@@ -114,6 +116,18 @@ describe.skipIf(!available)('office store, runner and event workflow (Postgres)'
     expect((await events.questions('otca', event.id))[0]).toMatchObject({ status: 'dijawab', speaker: 'Frau Priska' })
     const ppt = await events.startStage('otca', event.id, 'ppt', 'uji')
     expect(ppt.brief).toContain('Mulai dari bahasa')
+  })
+
+  it('stores versioned Content Creator QC before approval and keeps reports brand scoped',async()=>{
+    const task=await store.createTask('otca',{agentType:'content-creator',kind:'konten.caption',title:'Uji caption',brief:'Konsep anonim',createdBy:'uji'})
+    await runTask(deps(scriptedHermes([{output:'[KONFIRMASI: tanggal]\nCTA: Daftar'}])),'otca',task.id)
+    expect((await store.latestContentQc('otca',task.id))?.checks.some(c=>c.status==='warning')).toBe(true)
+    expect(await store.latestContentQc('infojerman',task.id)).toBeUndefined()
+    const review=(await store.approvals('otca',{taskId:task.id,open:true}))[0]
+    await store.decide('otca',review.id,{decision:'rejected',note:'Hapus penanda tanggal',actor:'uji'})
+    await runTask(deps(scriptedHermes([{output:'Caption yang direvisi\nCTA: Daftar'}])),'otca',task.id)
+    expect((await store.latestContentQc('otca',task.id))?.checks.some(c=>c.status==='warning')).toBe(false)
+    expect((await store.taskEvents('otca',task.id)).filter(e=>e.type==='content_qc').map(e=>e.payload.version)).toEqual([1,2])
   })
 
   it('waits for the Codex quota instead of spending the Claude pool, and retries other failures', async () => {

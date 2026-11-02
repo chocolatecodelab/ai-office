@@ -1,3 +1,4 @@
+import { CAFE, PINGPONG, TREADMILLS } from './equipment.ts'
 import { describe, expect, it } from 'vitest'
 import { BUILDING, CORE, createBuilding, DESK_SIZE, FLOOR_HEIGHT, floorAt, LIFT, route, seatFor, type BrandInput, type BuildingLayout, type Vec3 } from './building.ts'
 
@@ -27,6 +28,60 @@ function samples(start: Vec3, path: Vec3[]): Vec3[] {
 }
 
 describe('office building layout', () => {
+  it('separates opposite walking directions on the shared aisle', () => {
+    const left=layout.idleSpots.find(s=>s.key==='lounge-1')!
+    const right=layout.idleSpots.find(s=>s.key==='game-3')!
+    const east=route(layout,left,right).filter(p=>Math.abs(p[2]-0.92)<0.001)
+    const west=route(layout,right,left).filter(p=>Math.abs(p[2]-0.28)<0.001)
+    expect(east.length).toBeGreaterThanOrEqual(2)
+    expect(west.length).toBeGreaterThanOrEqual(2)
+    expect(Math.abs(east[0][2]-west[0][2])).toBeGreaterThan(0.6)
+  })
+  it('routes shared-room visitors around the ping-pong table, cafe table and treadmills', () => {
+    const obstacles = [
+      { owner: undefined, minX: PINGPONG.x-PINGPONG.length/2, maxX: PINGPONG.x+PINGPONG.length/2, minZ: PINGPONG.z-PINGPONG.width/2, maxZ: PINGPONG.z+PINGPONG.width/2 },
+      ...CAFE.tables.map(x => ({owner:undefined,minX:x-0.5,maxX:x+0.5,minZ:CAFE.z-0.275,maxZ:CAFE.z+0.275})),
+      { owner: undefined, minX: -8.55, maxX: -7.05, minZ: 2.875, maxZ: 3.525 },
+      ...TREADMILLS.xs.map((x,i) => ({ owner: `gym-${i+1}`, minX: x-0.425, maxX: x+0.425, minZ: -4.325, maxZ: -2.675 })),
+    ]
+    const collisions: string[] = []
+    for (const from of layout.idleSpots) for (const to of layout.idleSpots) {
+      if (from === to) continue
+      if (samples(from.position,route(layout,from,to)).some(([x,,z]) => obstacles.some((box) => box.owner !== from.key && box.owner !== to.key && inside(box,x,z,-0.02)))) collisions.push(`${from.key} → ${to.key}`)
+    }
+    expect(collisions).toEqual([])
+  })
+  it('provides six shared rooms with doorways and a private manager office on every brand floor', () => {
+    expect(layout.floors[0].zones.map((zone) => zone.key).sort()).toEqual(['cafe','game','gym','lounge','pingpong','rest'])
+    for (const floor of layout.floors) {
+      for (const zone of floor.zones.filter((zone) => zone.door)) {
+        expect(zone.door!.x - zone.door!.width/2).toBeGreaterThanOrEqual(zone.minX)
+        expect(zone.door!.x + zone.door!.width/2).toBeLessThanOrEqual(zone.maxX)
+      }
+      if (!floor.brand) continue
+      const manager = floor.desks.find((desk) => desk.manager)!
+      const room = floor.zones.find((zone) => zone.key === 'manager')!
+      expect(inside(room, manager.center[0], manager.center[2])).toBe(true)
+      expect(inside(room, manager.seat.position[0], manager.seat.position[2])).toBe(true)
+      const path = samples(manager.seat.position, route(layout, manager.seat, layout.idleSpots[0]))
+      const exit = path.find(([x,,z]) => !inside(room,x,z))!
+      expect(Math.abs(exit[0]-room.door!.x)).toBeLessThan(room.door!.width/2)
+      for (const desk of floor.desks.filter((desk) => !desk.manager)) {
+        expect(samples(desk.seat.position, route(layout,desk.seat,layout.idleSpots[0])).some(([x,height,z]) => height === floor.y && inside(room,x,z))).toBe(false)
+      }
+    }
+  })
+  it('provides each brand with a meeting suite clear of desk routes and the lift aisle', () => {
+    for (const floor of layout.floors.slice(1)) {
+      const meeting = floor.zones.find((zone) => zone.key === 'meeting')!
+      expect(meeting.door?.width).toBeGreaterThanOrEqual(1.2)
+      expect(meeting.minZ).toBeGreaterThan(floor.aisleZ + 0.5)
+      for (const desk of floor.desks) {
+        const points = samples(desk.seat.position, route(layout, desk.seat, layout.idleSpots[0]))
+        expect(points.some(([x, y, z]) => Math.abs(y - floor.y) < 0.01 && inside(meeting, x, z))).toBe(false)
+      }
+    }
+  })
   it('stacks the shared ground floor and the four brand floors in blueprint order', () => {
     expect(layout.floors.map((floor) => floor.brand?.id ?? 'ground')).toEqual(['ground', 'otca', 'infojerman', 'ciaomanda', 'jepangkoey'])
     expect(layout.floors.map((floor) => floor.y)).toEqual([0, 1, 2, 3, 4].map((index) => index * FLOOR_HEIGHT))
@@ -101,7 +156,7 @@ describe('office building layout', () => {
       if (!zone?.door) continue
       const [doorX, doorZ] = [zone.door.x, zone.door.z]
       // The walk out crosses the room's edge only at its door.
-      const crossing = samples(spot.position, route(layout, spot, layout.idleSpots[layout.idleSpots.length - 3]))
+      const crossing = samples(spot.position, route(layout, spot, layout.idleSpots.find((place) => place.key === 'bakso')!))
         .find(([x, , z]) => !inside(zone, x, z))
       expect(crossing, spot.key).toBeDefined()
       const near = Math.abs(crossing![0] - doorX) <= zone.door.width / 2 + 0.1 || Math.abs(crossing![2] - doorZ) <= zone.door.width / 2 + 0.1

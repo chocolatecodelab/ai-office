@@ -505,6 +505,13 @@ Dari blueprint L4 dan L6-02:
 - 3 image ads event diproduksi dari konsep L1.
 - Brain/Pengguna: pilar konten & 10 contoh hook OTCA, dataset evaluasi.
 
+**Status L2 (3 Nov 2026, tahap awal):**
+- Draft Content Creator memiliki arahan struktur: audiens anonim, angle, headline, isi, CTA, sumber dan catatan QC; aturan di context/ tetap menjadi acuan.
+- Penyaringan teks sebelum Approval tersimpan per versi di task_events. Penanda data belum dikonfirmasi, frasa jaminan terbatas, dan label CTA ditandai; checklist resmi brand ditampilkan sebagai pemeriksaan manual.
+- Laporan tersedia di halaman Approval dan panel agent Office. QC ini bukan verifikasi fakta/izin/desain, dan tidak menyetujui hasil otomatis.
+- Tes mencakup QC versi 1 → penolakan → versi 2, serta isolasi antarbrand.
+- **Masih belum selesai:** routing Manager, adapter gambar mock/live, template visual dan produksi tiga image ads dari konsep event, alur draft/final sesuai batas biaya, evaluasi dataset tim. Tahap produksi ads pada Event belum dibuka sebelum pipeline-nya tersedia.
+
 ### L3 · Digital Marketing OTCA + landing page event (6 hari)
 Dari blueprint L7 dan L6-05:
 - Agent Digital Marketing + skill campaign plan & ads copy (L7-01).

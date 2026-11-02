@@ -12,10 +12,13 @@ export interface OfficeTask {
   result: string | null; error: string | null; retryAt: string | null; createdAt: string; updatedAt: string
 }
 
-export interface OfficeAgent { brandId: string; agentType: string; active: boolean; paused: boolean; status: AgentStatus; currentTask: string | null }
-export interface OfficeBrand { id: string; name: string; color: string; paused: boolean; agents: OfficeAgent[] }
+export interface OfficeAgent { brandId: string; agentType: string; active: boolean; paused: boolean; status: AgentStatus; currentTask: string | null; retryAt?: string | null }
+export interface OfficeBrand { id: string; name: string; color: string; paused: boolean; agents: OfficeAgent[]; summary?: { queued: number; approvals: number; waitingQuota: number } }
+
+export interface ContentQc { scope:'text-only'; checks:Array<{label:string;status:'pass'|'warning'|'manual';note:string}> }
 
 export interface OfficeApproval {
+  qc?: ContentQc
   id: string; taskId: string; brandId: string; approvalType: string; approver: string
   decision: 'approved' | 'rejected' | null; note: string | null; createdAt: string; task: OfficeTask | undefined
 }
@@ -67,6 +70,7 @@ export function useOfficeLive(brand: string, onChange: () => void): void {
     const connect = () => {
       const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws'
       socket = new WebSocket(`${scheme}://${window.location.host}/api/office/ws?brand=${encodeURIComponent(brand)}`)
+      // Recover changes made before connecting or while the connection was down.
       socket.onopen = () => latest.current()
       socket.onmessage = () => latest.current()
       socket.onclose = () => { if (!closed) retry = setTimeout(connect, 3000) }
