@@ -151,6 +151,29 @@ aset-sumber/ (tidak di-git, besar)  →  scripts/optimize-models.mjs (gltf-trans
   - Sumber semua aset dan logo dicatat di `docs/aset-3d.md`.
 - **Halaman uji:** `#/lab-3d`, dihapus setelah K4.
 
+## Hasil K1 (2 Nov 2026)
+
+- **Tata letak di `src/office3d/building.ts`.** Ini fungsi murni yang menerima daftar brand dan krunya, lalu menghasilkan lantai, meja, zona ruangan, tempat santai, dan jalur jalan. Tata letak lama (`src/office3d-layout.ts`) masih dipakai halaman Office sampai K2.
+  - **Gedung:** 20 × 11 m, tinggi tiap lantai 3,4 m. Lantai dasar dipakai bersama; lantai 1–4 berurutan OTCA, Info Jerman, Ciao Manda, Jepang Koey.
+  - **Lantai brand:** meja spesialis berjajar di dinding belakang di bawah papan logo, dengan meja Manager di depan dekat lift. OTCA punya 6 meja, sister brand masing-masing 4.
+  - **Lantai dasar:** ada 5 zona dengan pintu masing-masing (game room, ruang rapat, pantry, lounge, lobi), ditambah 12 tempat santai, termasuk gerobak bakso dan kopi di gang.
+- **Jalur jalan.** Setiap tempat punya "jalan keluar" ke lorong lantainya. Perpindahan antar lantai hanya lewat lift: lajur di depan lift, masuk ke dalam lift, naik atau turun, lalu keluar.
+- **Test (`src/office3d/building.test.ts`, 8 test).** Yang diuji:
+  - urutan lantai dan jumlah meja per lantai;
+  - meja tidak saling tumpuk, berada di luar inti lift dan lorong, dan meja Manager paling dekat ke lift;
+  - lebih dari 400 jalur antar tempat tidak ada yang menembus meja;
+  - perpindahan lantai hanya terjadi di dalam lift;
+  - agent keluar ruangan lewat pintunya;
+  - hanya tempat di luar gedung yang keluar lewat pintu masuk.
+- **Pratinjau (`#/lab-3d`).**
+  - Gedung digambar dari tata letak (`src/scene3d/building.tsx`) dengan furnitur Kenney (`src/scene3d/furniture.ts`, posisi dipusatkan dan skala 2) dan papan logo brand.
+  - Ada tombol untuk tiap lantai, dan satu agent berjalan dari mejanya di lantai 1 ke pantry lewat lift.
+  - Satu lantai brand memakai sekitar 270 draw call dan 23 ribu segitiga, dengan 60 fps di laptop.
+- **Ditunda ke K3:**
+  - dinding dan pintu ruangan (sekarang zona hanya diberi warna lantai);
+  - arah monitor dan kursi;
+  - perabot game room dan gerobak di gang (memakai ulang prop Ruang).
+
 ## 9. Tahapan kerja
 
 Total sekitar **12 hari kerja** (blueprint L3 hanya 6 hari karena memakai fork siap pakai; tambahan waktu untuk GLB dan 4 lantai).
@@ -158,7 +181,7 @@ Total sekitar **12 hari kerja** (blueprint L3 hanya 6 hari karena memakai fork s
 | Tahap | Isi | Hari | Selesai jika |
 |---|---|---|---|
 | **K0 · Spike aset & pipeline** ✅ | Pilih paket CC0, pipeline Draco, logo brand, scene uji furnitur GLB + avatar Ruang (lihat "Hasil K0") | 1,5 | Furnitur GLB dan avatar tampil di scene uji; ukuran tercatat (fps HP diukur di K6) |
-| **K1 · Tata letak gedung** | Tulis ulang `office3d-layout.ts`: lantai dasar + lantai brand dari `agents.json`, posisi meja per agent, lift/tangga, jalur jalan antar lantai. Hapus kamar/balkon. Test unit tata letak | 2 | Test layout lulus; OTCA 6 meja, sister brand 4 |
+| **K1 · Tata letak gedung** ✅ | Tulis ulang `office3d-layout.ts`: lantai dasar + lantai brand dari `agents.json`, posisi meja per agent, lift/tangga, jalur jalan antar lantai. Hapus kamar/balkon. Test unit tata letak | 2 | Test layout lulus; OTCA 6 meja, sister brand 4 |
 | **K2 · Data & status** | Hook data dari `/api/office/brands` + WebSocket, pemetaan 7 status ke posisi dan animasi, HUD baru (antre, approval terbuka, menunggu kuota). Lepas halaman Office dari runtime lama | 1,5 | Status berubah di 3D ≤ 2 detik setelah berubah di server |
 | **K3 · Lingkungan GLB** | Gedung, lantai dasar, furnitur, dan dekor brand dari GLB; warna dan papan nama dari `visual.json`. Tombol lantai dan tampilan potongan | 2 | Semua lantai tampil dengan identitas brand; ukuran sesuai batas |
 | **K4 · Karakter & animasi** | Avatar Ruang untuk 18 agent (warna per peran dan brand), pose per status (kerja, tidur, menunggu, revisi, bingung, dijeda), perpindahan lantai lewat lift, gelembung dan ikon status | 1,5 | Ketujuh status terlihat berbeda (cek visual per status) |

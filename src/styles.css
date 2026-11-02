@@ -1630,3 +1630,4 @@ aside.office-panel { background: color-mix(in srgb, var(--surface) 96%, transpar
 .lab-3d { display: grid; grid-template-rows: auto 1fr; height: calc(100vh - 120px); min-height: 480px; margin-top: 18px; border: 1px solid var(--border); }
 .lab-3d-bar { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; padding: 10px 14px; font: 12px ui-monospace, monospace; color: var(--text-muted); border-bottom: 1px solid var(--border); }
 .lab-3d-bar input { width: 64px; background: var(--surface); color: var(--text); border: 1px solid var(--border-strong); }
+.lab-3d-floors { margin-top: 0; }
