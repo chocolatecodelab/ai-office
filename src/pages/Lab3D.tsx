@@ -40,7 +40,7 @@ function animate(parts: AvatarParts, pose: Pose, time: number) {
   }
 }
 
-function SeatedAvatar({ id, seat, pose }: { id: string; seat: Spot; pose: Pose }) {
+export function SeatedAvatar({ id, seat, pose }: { id: string; seat: Spot; pose: Pose }) {
   const parts = useParts()
   useFrame((state) => animate(parts, pose, state.clock.elapsedTime))
   return <group position={seat.position} rotation={[0, seat.facing, 0]}><AvatarBody parts={parts} colors={agentLook(id)}/></group>
@@ -99,7 +99,7 @@ function FrameRate({ output }: { output: React.RefObject<HTMLSpanElement | null>
 }
 
 /** Orbit camera that glides to the floor in view. */
-function Camera({ floor }: { floor: number }) {
+export function Camera({ floor }: { floor: number }) {
   const { camera, gl } = useThree()
   const controls = useMemo(() => new OrbitControls(camera, gl.domElement), [camera, gl])
   useEffect(() => {

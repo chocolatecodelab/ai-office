@@ -174,6 +174,15 @@ aset-sumber/ (tidak di-git, besar)  →  scripts/optimize-models.mjs (gltf-trans
   - arah monitor dan kursi;
   - perabot game room dan gerobak di gang (memakai ulang prop Ruang).
 
+## Implementasi K2 (2 Nov 2026)
+
+- Halaman Office memakai `BlueprintOffice.tsx`, bukan komponen runtime lama. Layout dan kru dibaca dari API office; Lab 3D tetap menjadi scene uji K1.
+- Snapshot menggabungkan brand, tugas dan approval terbuka. WebSocket tiap brand memicu refresh; koneksi ulang juga melakukan refresh. Polling 1,5 detik menjadi cadangan. Saat gagal, data terakhir ditandai; data contoh tidak dipakai.
+- Ketujuh status memiliki label, ikon dan warna berbeda; agen idle ditempatkan di lantai dasar, lainnya di meja masing-masing. Pose kerja/revisi dan tidur kuota memakai avatar Ruang. Animasi lengkap dan perjalanan antar lantai tetap K4.
+- HUD menampilkan jumlah tugas antre, approval terbuka dan tugas menunggu kuota. Lantai awal memprioritaskan agen menunggu approval/error. Ada pemilih lantai dan fallback daftar 2D.
+- Validasi: 157 test lulus termasuk integrasi Postgres, build lulus, ESLint file yang disentuh lulus, transformasi modul Vite dan API brand melalui proxy lulus.
+- **Gerbang K2 belum dinyatakan lulus:** pengukuran perubahan visual ≤2 detik di browser dengan perubahan tugas nyata belum dilakukan. Uji rendering WebGL/perangkat dan animasi lengkap masih diperlukan. Halaman Agents/Task Board lama belum dimigrasikan.
+
 ## 9. Tahapan kerja
 
 Total sekitar **12 hari kerja** (blueprint L3 hanya 6 hari karena memakai fork siap pakai; tambahan waktu untuk GLB dan 4 lantai).

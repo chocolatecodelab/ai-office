@@ -67,6 +67,7 @@ export function useOfficeLive(brand: string, onChange: () => void): void {
     const connect = () => {
       const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws'
       socket = new WebSocket(`${scheme}://${window.location.host}/api/office/ws?brand=${encodeURIComponent(brand)}`)
+      socket.onopen = () => latest.current()
       socket.onmessage = () => latest.current()
       socket.onclose = () => { if (!closed) retry = setTimeout(connect, 3000) }
     }
