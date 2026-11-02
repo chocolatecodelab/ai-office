@@ -40,7 +40,8 @@ describe('profile lock', () => {
     expect(await who()).toEqual({ hidden: ['coder', 'research'], all: false })
     const saved = await readFile(join(dir, 'profile-lock.json'), 'utf8')
     expect(saved).not.toContain(PIN)
-    expect((await stat(join(dir, 'profile-lock.json'))).mode & 0o777).toBe(0o600)
+    // Windows has no POSIX file modes.
+    if (process.platform !== 'win32') expect((await stat(join(dir, 'profile-lock.json'))).mode & 0o777).toBe(0o600)
     // A second setup cannot replace the PIN without the current one.
     expect((await post('setup', { pin: '111111', agents: [] })).status).toBe(409)
   })

@@ -52,7 +52,8 @@ describe('access code', () => {
 
     const saved = await readFile(join(dir, 'access.json'), 'utf8')
     expect(saved).not.toContain(CODE)
-    expect((await stat(join(dir, 'access.json'))).mode & 0o777).toBe(0o600)
+    // Windows has no POSIX file modes.
+    if (process.platform !== 'win32') expect((await stat(join(dir, 'access.json'))).mode & 0o777).toBe(0o600)
   })
 
   it('unlocks with the code, remembers the device for 7 days on request, and locks again', async () => {

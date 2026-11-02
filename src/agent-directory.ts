@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react'
 
 /** One agent of the office crew, as served by /api/claude/agents. */
-export interface CrewAgent { id: string; name: string; role: string; project?: { name: string } }
+export interface CrewAgent { id: string; name: string; role: string }
 
-// Shared by every page: the crew changes when Projects are registered, so labels come from the server.
+// Shared by every page: agent names come from the server, so every page labels agents the same way.
 let crew: CrewAgent[] = []
 let pending: Promise<CrewAgent[]> | null = null
 const listeners = new Set<(agents: CrewAgent[]) => void>()
@@ -26,7 +26,7 @@ export function loadCrew(force = false): Promise<CrewAgent[]> {
   return pending
 }
 
-/** The current crew; refetched on mount so a newly registered Project shows up. */
+/** The current crew; refetched on mount so a restarted server's crew shows up. */
 export function useCrew(): CrewAgent[] {
   const [agents, setAgents] = useState<CrewAgent[]>(crew)
   useEffect(() => {

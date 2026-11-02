@@ -1,0 +1,12 @@
+# Local development on the 15 GB laptop (docs/PLAN.md 6.2): ports on 127.0.0.1 only, smaller limits.
+# Host ports are 1xxxx so they never clash with databases installed on the laptop itself.
+services:
+  postgres:
+    ports: ["127.0.0.1:15432:5432"]
+    mem_limit: 1g
+  redis:
+    ports: ["127.0.0.1:16379:6379"]
+    mem_limit: 256m
+  litellm:
+    ports: ["127.0.0.1:14000:4000"]
+    mem_limit: 1g

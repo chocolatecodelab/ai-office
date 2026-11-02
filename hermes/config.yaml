@@ -1,0 +1,12 @@
+# Hermes config for one brand container (copied to data/<slug>/config.yaml by scripts/hermes-init.mjs).
+# Spike L0: LiteLLM is the only provider. L1 adds openai-codex (ChatGPT Plus) as primary once
+# logged in, with no fallback chain for normal tasks (docs/spike-hermes.md).
+model:
+  provider: litellm
+  default: cepat
+
+providers:
+  litellm:
+    api: http://litellm:4000/v1
+    key_env: LITELLM_KEY_UMUM
+    transport: openai_chat

@@ -8,7 +8,6 @@ import { redactDashboard, redactOffice, redactTasks, redactUsage } from './priva
 import { installProfileLock, isHidden, type Privacy } from './profile-lock.js'
 import { API_VERSION } from './api-version.js'
 import { claudeService, CLAUDE_AGENTS } from './claude-service.js'
-import { startRemoteMcp } from './mcp-http.js'
 
 const HOST = '127.0.0.1'
 const PORT = Number(process.env.RUANG_PORT ?? process.env.MISSION_CONTROL_PORT) || 3001
@@ -42,56 +41,6 @@ app.post('/api/claude/config', (request, response) => {
 
 app.get('/api/claude/agents', (_request, response) => {
   response.json(claudeService.getAgents())
-})
-
-// One agent per claude.ai Project: create or update it from the Project's instructions and knowledge.
-app.post('/api/claude/agents', (request, response) => {
-  const body = request.body || {}
-  if (!body.projectName || !body.role || !body.instructions) {
-    response.status(400).json({ error: 'projectName, role dan instructions harus diisi.' })
-    return
-  }
-  try {
-    response.json(claudeService.upsertProjectAgent({
-      projectName: String(body.projectName),
-      agentName: body.agentName ? String(body.agentName) : undefined,
-      role: String(body.role),
-      description: String(body.description || ''),
-      instructions: String(body.instructions),
-      knowledge: body.knowledge ? String(body.knowledge) : undefined,
-      projectUrl: body.projectUrl ? String(body.projectUrl) : undefined,
-    }))
-  } catch (error) {
-    response.status(400).json({ error: error instanceof Error ? error.message : String(error) })
-  }
-})
-
-// Mirror mode: a claude.ai Project reports work it does itself, so its agent shows it in the office.
-app.post('/api/claude/activity', (request, response) => {
-  const body = request.body || {}
-  if (!body.agent || !['started', 'progress', 'done', 'failed'].includes(body.phase)) {
-    response.status(400).json({ error: 'agent dan phase (started, progress, done, failed) harus diisi.' })
-    return
-  }
-  try {
-    response.json(claudeService.reportActivity({
-      agent: String(body.agent),
-      phase: body.phase,
-      title: body.title ? String(body.title) : undefined,
-      detail: body.detail ? String(body.detail) : undefined,
-      activityId: body.activityId ? String(body.activityId) : undefined,
-    }))
-  } catch (error) {
-    response.status(400).json({ error: error instanceof Error ? error.message : String(error) })
-  }
-})
-
-app.delete('/api/claude/agents/:agentId', (request, response) => {
-  try {
-    response.json(claudeService.removeAgent(String(request.params.agentId)))
-  } catch (error) {
-    response.status(400).json({ error: error instanceof Error ? error.message : String(error) })
-  }
 })
 
 app.get('/api/chat/:agentId/history', (request, response) => {
@@ -399,6 +348,3 @@ app.use((error: unknown, _request: Request, response: Response, _next: NextFunct
 })
 
 app.listen(PORT, HOST, () => console.log(`Claude AI Office listening on http://${HOST}:${PORT}${existsSync(distDirectory) ? ' (serving built UI)' : ' (API only; run the Vite dev server for the UI)'}`))
-
-// Remote MCP for claude.ai (own port, off unless RUANG_MCP_SECRET is set). See docs/MCP.md.
-startRemoteMcp(HOST)

@@ -1,0 +1,95 @@
+{
+  "brand": "Ciao Manda",
+  "status": "RESMI",
+  "source": "Brand Guidelines Video Ciao Manda",
+  "colors": {
+    "solid_red": "#D40000",
+    "white": "#FFFFFF",
+    "black": "#000000"
+  },
+  "color_roles": {
+    "#D40000": "teks headline & subheadline, elemen pendukung",
+    "#FFFFFF": "teks body, elemen pendukung",
+    "#000000": "opsional: body text atau alternatif highlight"
+  },
+  "observed_style": "Headline merah dengan outline putih di atas footage; subheadline dalam pill putih berteks merah (dari contoh implementasi)",
+  "fonts": {
+    "headline": {
+      "family": "Montserrat",
+      "weight": "ExtraBold",
+      "size_pt": [
+        40,
+        75
+      ],
+      "capcut_pt": [
+        12,
+        15
+      ]
+    },
+    "subheadline": {
+      "family": "Montserrat",
+      "weight": "Bold",
+      "size_pt": [
+        24,
+        48
+      ],
+      "capcut_pt": [
+        10,
+        12
+      ]
+    },
+    "body": {
+      "family": "Montserrat",
+      "weight": "SemiBold atau Medium",
+      "size_pt": [
+        18,
+        24
+      ],
+      "capcut_pt": [
+        6,
+        7
+      ]
+    },
+    "highlight": {
+      "family": "Montserrat",
+      "weight": "Bold"
+    }
+  },
+  "formats": {
+    "tiktok_slide": {
+      "w": 1080,
+      "h": 1350,
+      "margin_x": 108,
+      "margin_y": 108
+    },
+    "reels_tiktok_video": {
+      "resolution": "1080p (minimal 720p)",
+      "w": 1080,
+      "h": 1920,
+      "margin_x": 108,
+      "margin_y": 315
+    }
+  },
+  "logo": {
+    "w": 235,
+    "h": 72,
+    "usage": "logo kecil di bagian atas/sudut konten"
+  },
+  "footer": {
+    "w": 230,
+    "h": 40
+  },
+  "emoji": "Emoji Apple; jika perangkat bukan Apple, unduh gambar dari emojipedia.org/apple lalu sisipkan",
+  "source_credit": {
+    "required": true,
+    "position": "bagian bawah video",
+    "formats": [
+      "tiktok.com/@username",
+      "instagram.com/@username",
+      "youtube.com/@username",
+      "pinterest.com/username",
+      "rednote ID (nomor / nama ID)"
+    ]
+  },
+  "differentiator": "Beda dengan Jepang Koey: di Ciao Manda MERAH adalah warna headline; hitam hanya opsional."
+}

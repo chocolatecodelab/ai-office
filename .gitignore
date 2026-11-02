@@ -14,3 +14,7 @@ coverage
 *.sqlite3
 *.log
 .DS_Store
+
+# Blueprint stack: env files per service and per-brand Hermes data (memory, sessions, Codex login)
+infra/env/*.env
+data/

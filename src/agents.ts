@@ -20,9 +20,11 @@ export function hashName(name: string): number {
 
 const SPECIAL_LOOKS: Record<string, AgentLook> = {
   ceo: { hair: '#1d293c', skin: '#e9b57d', shirt: '#2c3e50', pants: '#1a252f' },
-  marketing: { hair: '#8b5a2b', skin: '#f1c9a0', shirt: '#e67e22', pants: '#34495e' },
-  researcher: { hair: '#2f4f3a', skin: '#e9b57d', shirt: '#16a085', pants: '#2c3e50' },
-  creator: { hair: '#6a4d8d', skin: '#dca06e', shirt: '#8e44ad', pants: '#2d3436' }
+  'event-specialist': { hair: '#3b2a20', skin: '#f1c9a0', shirt: '#c0392b', pants: '#2c3e50' },
+  'content-creator': { hair: '#2f4f3a', skin: '#e9b57d', shirt: '#16a085', pants: '#2c3e50' },
+  'video-editor': { hair: '#6a4d8d', skin: '#dca06e', shirt: '#8e44ad', pants: '#2d3436' },
+  'social-media-manager': { hair: '#c9a24a', skin: '#c98e5a', shirt: '#2980b9', pants: '#34495e' },
+  'digital-marketing': { hair: '#8b5a2b', skin: '#f1c9a0', shirt: '#e67e22', pants: '#34495e' }
 }
 
 export function agentLook(id: string): AgentLook {

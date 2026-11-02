@@ -12,7 +12,7 @@ describe('OfficeDetail', () => {
       freshness: 'Runtime 2026-09-27T12:00:00.000Z; Kanban 2026-09-27T12:00:00.000Z; activity 2026-09-27T12:00:00.000Z',
     }
 
-    const markup = renderToStaticMarkup(<OfficeDetail station={station} onClose={vi.fn()}/>)
+    const markup = renderToStaticMarkup(<OfficeDetail station={station} onClose={vi.fn()} initialTab="Overview"/>)
 
     expect(markup).toContain('role="dialog"')
     expect(markup).toContain('aria-modal="true"')

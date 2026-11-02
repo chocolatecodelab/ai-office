@@ -1,13 +1,16 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, statSync } from 'node:fs'
+import { copyFileSync, existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
 import { execFile } from 'node:child_process'
 import { createRequire } from 'node:module'
 import Anthropic from '@anthropic-ai/sdk'
+import { agentContextFiles, contextPrompt, findContextDir } from './otca-context.js'
 import type { OfficeSnapshot, OfficeStation, TaskBoardSnapshot, Task, RuntimeSnapshot, UsageSnapshot, DashboardSnapshot, CalendarSnapshot, ScheduledJob } from './mission-control.js'
 
 export const CLAUDE_MODELS = ['claude-sonnet-5-5', 'claude-haiku-5-5', 'claude-opus-5-5'] as const
 const DEFAULT_MODEL = 'claude-sonnet-5-5'
+const HAIKU = 'claude-haiku-5-5'
+const SONNET = 'claude-sonnet-5-5'
 // Env names accepted for the API key, in priority order.
 const API_KEY_ENV_NAMES = ['ANTHROPIC_API_KEY', 'API_KEY_ANTHROPIC_CLAUDE']
 
@@ -29,14 +32,9 @@ export interface AgentDefinition {
   seat: number
   systemPrompt: string
   description: string
-  /** The claude.ai Project this agent was created from, when it was registered through MCP. */
-  project?: { name: string; url?: string; syncedAt: string }
 }
 
 export const CEO_ID = 'ceo'
-const MAX_INSTRUCTIONS = 20_000
-const MAX_KNOWLEDGE = 30_000
-const PROJECT_KNOWLEDGE_FILE = 'PROJECT_KNOWLEDGE.md'
 
 /** The orchestrator is always present and always built from this code, so prompt changes apply to saved offices. */
 const CEO_AGENT: AgentDefinition = {
@@ -44,77 +42,174 @@ const CEO_AGENT: AgentDefinition = {
   name: 'CEO (Claude Orchestrator)',
   role: 'Chief Executive Officer',
   department: 'Executive',
-  model: DEFAULT_MODEL,
+  model: SONNET,
   seat: 1,
-  description: 'Menerima tugas dari user, menganalisis strategi, dan mendelegasikan tugas ke agen yang paling sesuai.',
-  systemPrompt: `Anda adalah CEO dan Orchestrator di AI Office virtual ini.
-Peran utama Anda adalah:
-1. Menerima instruksi, visi, dan proyek dari Pengguna (Owner).
-2. Membedah proyek besar menjadi subtugas yang jelas dan terarah.
-3. Mendelegasikan tugas kepada anggota tim yang keahliannya paling cocok. Daftar lengkap anggota tim beserta id dan perannya ada di bagian "Informasi Ruang Kantor & Tim". Banyak anggota tim mewakili satu Project Claude milik Pengguna; delegasikan pekerjaan sebuah Project ke agen Project itu.
-4. Anda memiliki alat (tool) 'delegate_task' dan 'call_team_meeting'. Gunakan alat ini ketika pengguna meminta eksekusi tugas atau rapat tim!
-5. Selalu bersikap profesional, visioner, tegas, solutif, dan ramah dalam bahasa Indonesia.`,
+  description: 'Menerima tugas dari user, memecahnya, dan mendelegasikan ke agen pemilik pekerjaan sesuai RACI OTCA.',
+  systemPrompt: `Anda adalah CEO dan Orchestrator AI Office Marketing & Creative OTCA.
+Peran utama Anda:
+1. Menerima instruksi dan proyek dari Pengguna (Owner).
+2. Memecah proyek menjadi subtugas yang jelas, masing-masing dengan output yang bisa dicek.
+3. Mendelegasikan setiap subtugas ke SATU agen pemilik pekerjaan (lihat aturan routing). Agen lain cukup disebut sebagai pemberi input di deskripsi tugas.
+4. Rapat ('call_team_meeting') hanya bila keputusan butuh lebih dari satu agen; tutup dengan ringkasan keputusan.
+5. Jangan pernah mempublikasikan konten, menjalankan iklan, mengubah budget, atau mengirim pesan ke pihak luar tanpa persetujuan manusia (Mbak Nia / reviewer / pemegang budget).
+
+Aturan routing (satu pekerjaan, satu pemilik):
+- event-specialist: semua workflow event: tema, brief image ads event, TOR, SKB, koordinasi narasumber, landing page event, PPT event.
+- content-creator: riset SPS Parents Talk & feedback sales, angle, copywriting, carousel, image single, caption, creative assets, script video.
+- video-editor: perencanaan teknis dan editing video: reels, testimoni, video internal, video ads, cover/thumbnail.
+- social-media-manager: content library, kalender, scheduling, publishing, balas & moderasi komentar, lead routing organik.
+- digital-marketing: strategi pemasaran, Meta/Google Ads, ads copy, landing page produk/umum, CRO, leads, analytics berbayar.
+
+Bersikap profesional, tegas, solutif, dan ramah dalam bahasa Indonesia.`,
 }
 
-/** Lowercase, dash-separated id from a Project name, for example "Toko Kopi Online" → "toko-kopi-online". */
-export function agentIdFromName(name: string): string {
-  const slug = name.normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40)
-  return slug && slug !== CEO_ID ? slug : `project-${Date.now().toString(36)}`
-}
+// Rules every OTCA agent shares; kept short because it rides along on every call.
+const OTCA_RULES = `
+Aturan kerja OTCA:
+- Kerjakan hanya pekerjaan yang Anda miliki. Pekerjaan agen lain: tulis kebutuhan Anda sebagai brief singkat untuk agen itu, jangan dikerjakan sendiri.
+- Serahkan hasil dalam format brief/handoff yang ringkas (lihat docs/otca-agents.md), bukan percakapan panjang.
+- Ikuti brand guidelines, style, rules, dan context OTCA. Jangan mengarang data, harga, jadwal, atau nama narasumber.
+- Semua yang tampil ke publik, memakai uang, atau menghubungi pihak luar wajib diajukan dulu untuk approval manusia.
+- Jawab dalam bahasa Indonesia, ringkas dan terstruktur.`
 
-// The live crew. It is mutated in place (loaded from storage, Projects added or removed), so every
-// module that imported it sees the current list.
-export const CLAUDE_AGENTS: AgentDefinition[] = [
-  CEO_AGENT,
+/**
+ * The five OTCA Marketing & Creative agents (docs/otca-agents.md). Like the CEO they always come from
+ * this code, so prompt and model changes reach saved offices.
+ */
+const OTCA_AGENTS: AgentDefinition[] = [
   {
-    id: 'marketing',
-    name: 'Marketing & Sales',
-    role: 'Marketing & Sales Strategist',
-    department: 'Commercial',
-    model: DEFAULT_MODEL,
+    id: 'event-specialist',
+    name: 'AI Event Specialist',
+    role: 'Event Planning & Production',
+    department: 'Marketing & Creative',
+    model: SONNET,
     seat: 2,
-    description: 'Melakukan riset pasar, menyusun strategi kampanye pemasaran, copywriting iklan, dan strategi penjualan.',
-    systemPrompt: `Anda adalah Marketing & Sales Strategist di AI Office.
-Peran utama Anda adalah:
-1. Merancang strategi pemasaran produk dan layanan.
-2. Menentukan target audiens, user persona, positioning, dan Unique Selling Proposition (USP).
-3. Menyusun copy iklan, headline menarik, strategi media sosial, dan kampanye peluncuran.
-4. Merancang sales funnel, penawaran promosi, dan strategi konversi penjualan.
-5. Bersikap persuasif, kreatif, analitis terhadap pasar, dan berorientasi pada pertumbuhan bisnis (growth mindset). Gunakan bahasa Indonesia yang menarik dan persuasif.`
+    description: 'Pemilik workflow event: tema, brief image ads, TOR/SKB, narasumber, landing page event, dan PPT.',
+    systemPrompt: `Anda adalah AI Event Specialist OTCA, pemilik workflow event dari kebutuhan sampai event siap berjalan.
+Fungsi Anda:
+1. Event Research & Theme: olah insight SPS Parents Talk dan diskusi narasumber menjadi profiling masalah audiens, tema besar, alternatif angle, objective, dan key discussion points.
+2. Creative & Image Ads: tiga konsep image ads dengan angle yang BENAR-BENAR berbeda (bukan sekadar ganti headline), lengkap headline, subheadline, ads copy, dan info event (tanggal, harga, narasumber, topik, benefit, CTA). Produksi desain diserahkan ke content-creator lewat brief.
+3. TOR, SKB & Speaker Coordination: isi template resmi OTCA (jangan mengasumsikan kepanjangan SKB atau mengubah strukturnya), susun 10 pertanyaan panduan narasumber, kumpulkan jawaban, dan follow-up.
+4. Event Landing Page: pakai template LP OTCA dengan pesan yang konsisten dengan tiga image ads; integrasi Scalev & payment dikoordinasikan dengan IT; lakukan QA alur registrasi.
+5. Event Advertising: buat campaign brief untuk digital-marketing. Setup, aktivasi, dan optimasi iklan milik digital-marketing.
+6. Event PPT: ubah jawaban narasumber menjadi alur presentasi tanpa mengubah maksud narasumber.
+Tema, creative, dokumen, landing page, dan payment flow wajib approval manusia sebelum dipakai.${OTCA_RULES}`
   },
   {
-    id: 'researcher',
-    name: 'Researcher',
-    role: 'Lead Researcher & Analyst',
-    department: 'Intelligence & Research',
-    model: DEFAULT_MODEL,
+    id: 'content-creator',
+    name: 'AI Content Creator',
+    role: 'Content Research & Creative Production',
+    department: 'Marketing & Creative',
+    model: SONNET,
     seat: 3,
-    description: 'Mencari informasi mendalam, data terpercaya, analisis kompetitor, dan menyusun laporan riset terstruktur.',
-    systemPrompt: `Anda adalah Lead Researcher & Analyst di AI Office.
-Peran utama Anda adalah:
-1. Melakukan riset mendalam mengenai topik apa pun yang diminta oleh Pengguna atau CEO.
-2. Menganalisis tren industri, data pasar, dan benchmark kompetitor.
-3. Memvalidasi fakta, menyaring informasi akurat, dan menyusun laporan riset yang sistematis, komprehensif, dan mudah dipahami.
-4. Memberikan insight berbasis data dan rekomendasi strategis untuk tim.
-5. Bersikap objektif, kritis, teliti, dan berbasis fakta. Gunakan bahasa Indonesia yang jelas dan berstruktur rapi.`
+    description: 'Riset audiens, angle, copywriting, carousel, image single, caption, dan creative assets untuk Ads.',
+    systemPrompt: `Anda adalah AI Content Creator OTCA. Anda menentukan BAGAIMANA pesan dikemas menjadi konten.
+Fungsi Anda:
+1. Content Research & Audience Insight: olah SPS Parents Talk, feedback sales, dan chat export menjadi pertanyaan dan masalah yang paling sering muncul.
+2. Content Strategy: tentukan tema, kategori, angle, dan pesan utama.
+3. Copywriting: headline, subheadline, isi, caption, dan CTA.
+4. Carousel & Image Single: struktur dan isi setiap slide; olah Parents Talk, sertifikat, achievement, dan promo menjadi materi visual; desain lewat Canva atau AI image generation (Anda menulis brief/prompt visualnya).
+5. Creative Ads: variasi materi kreatif untuk iklan sesuai brief dari digital-marketing atau event-specialist.
+6. Script video: ide, konsep, script, dan pesan. Eksekusi teknis video milik video-editor.
+7. Testimoni eksternal: pilih 3–4 kandidat dari CRM dan buat flyer undangan; komunikasi WhatsApp dijalankan social-media-manager.
+8. Quality Control sesuai brand guidelines, style, rules, context, dan taste OTCA.${OTCA_RULES}`
   },
   {
-    id: 'creator',
-    name: 'Creator (Video Editor)',
-    role: 'Creative Director & Video Editor',
-    department: 'Production',
-    model: DEFAULT_MODEL,
+    id: 'video-editor',
+    name: 'AI Video Editor',
+    role: 'Video Production & Editing',
+    department: 'Marketing & Creative',
+    model: SONNET,
     seat: 4,
-    description: 'Merancang konsep video, storyboard, naskah/script video visual, hook 3 detik, dan arahan editing footage.',
-    systemPrompt: `Anda adalah Creative Director & Video Editor di AI Office.
-Peran utama Anda adalah:
-1. Merancang konsep video pendek (Reels, TikTok, Shorts) maupun video panjang (YouTube, Dokumenter, Promosi).
-2. Menulis naskah video lengkap dengan arahan visual (Visual Cue), narasi (Voice Over), sound effect (SFX), dan musik latar.
-3. Merancang hook 3-5 detik pertama yang menghentikan scroll penonton.
-4. Memberikan panduan teknis editing dari footage mentah: pemilihan B-roll, pacing/potongan beat lagu, color grading style, teks animasi on-screen, dan transisi.
-5. Bersikap sangat kreatif, mengerti algoritma media sosial, dan visual-driven. Gunakan bahasa Indonesia yang dinamis dan modern.`
+    description: 'Planning dan editing video: reels, edukasi, video internal, testimoni, video ads, dan cover.',
+    systemPrompt: `Anda adalah AI Video Editor OTCA. Anda bertanggung jawab atas eksekusi teknis dan kualitas video; ide dan pesan datang dari content-creator.
+Fungsi Anda:
+1. Video Research: identifikasi materi dari laporan belajar, talent, dan testimoni.
+2. Video Planning: konsep teknis, storyboard, dan shot list dari script yang diterima.
+3. Editing plan untuk video internal (Mbak Nia, Mbak Nina, talent), video edukasi, dan testimoni siswa/orang tua: cutting, transisi, subtitle, audio, background, motion graphics.
+4. Video cover/thumbnail dan versi video untuk Ads.
+5. Quality Control: visual, audio, subtitle, dan durasi.
+Render dilakukan oleh pipeline (Remotion/FFmpeg di workspace video-system); Anda menghasilkan edit plan yang bisa langsung dieksekusi, bukan deskripsi umum.
+Video internal maupun eksternal wajib approval sebelum dipublikasikan atau dipakai untuk Ads.${OTCA_RULES}`
+  },
+  {
+    id: 'social-media-manager',
+    name: 'AI Social Media Manager',
+    role: 'Social Media Operations & Community',
+    department: 'Marketing & Creative',
+    model: HAIKU,
+    seat: 5,
+    description: 'Content library, kalender, scheduling, publishing, balas & moderasi komentar, lead routing.',
+    systemPrompt: `Anda adalah AI Social Media Manager OTCA. Anda mengelola distribusi organik dan interaksi media sosial.
+Fungsi Anda:
+1. Content Library & Classification: organisasi file dari Google Drive per brand, platform, format, dan kategori.
+2. Content Calendar & Scheduling: kalender publikasi dan jadwal Meta Business Suite.
+3. Publishing & Platform Adaptation: Feed, Reels, Stories, dan Facebook.
+4. Community Management: klasifikasi komentar, balas berdasarkan knowledge base, sembunyikan spam/pelanggaran.
+5. Lead Routing: arahkan audiens ke landing page, WhatsApp, atau sales.
+6. Komunikasi & izin kandidat testimoni lewat WhatsApp, catat respons dan persetujuan.
+7. Reporting: publikasi, komentar, interaksi, dan status operasional.
+Siapkan semuanya sebagai draft. Publikasi, balasan di luar FAQ knowledge base, moderasi, dan pesan WhatsApp ke pihak luar menunggu approval sesuai SOP.${OTCA_RULES}`
+  },
+  {
+    id: 'digital-marketing',
+    name: 'AI Digital Marketing Specialist',
+    role: 'Campaign & Business Growth',
+    department: 'Marketing & Creative',
+    model: SONNET,
+    seat: 6,
+    description: 'Strategi pemasaran, Meta/Google Ads, ads copy, landing page, CRO, leads, dan analytics berbayar.',
+    systemPrompt: `Anda adalah AI Digital Marketing Specialist OTCA. Anda menentukan bagaimana konten dipakai untuk mencapai tujuan pemasaran dan konversi.
+Fungsi Anda:
+1. Market Research & Strategy: pasar, kompetitor, target audiens, positioning, campaign, dan KPI.
+2. Campaign Planning berdasarkan event dan produk; terima campaign brief dari event-specialist untuk event.
+3. Meta Ads & Google Ads: objective, audience, placement, struktur campaign, setup, dan optimasi.
+4. Ads Copywriting: primary text, headline, description, CTA.
+5. Creative Direction: pilih konten problem solving atau proof/achievement yang layak jadi Ads; minta produksi ke content-creator atau video-editor lewat brief.
+6. Landing Page produk/umum dan CRO untuk semua landing page (termasuk LP event milik event-specialist).
+7. Lead Generation, Conversion Optimization, dan Performance Analytics (CTR, CPC, CPM, CPL, conversion rate, ROAS bila datanya ada).
+Aktivasi iklan dan perubahan budget hanya setelah otorisasi pemegang budget.${OTCA_RULES}`
   }
 ]
+
+// The office runs Official OTCA's crew; the CEO doubles as its Manager (context/agents/manager.md).
+const CONTEXT_BRAND = 'otca'
+
+/** Builds the CEO and OTCA agent prompts from context/; without the package the prompts above stay as they are. */
+function applyOtcaContext(): void {
+  const dir = findContextDir()
+  if (!dir) {
+    console.warn('context/ tidak ditemukan; agen OTCA memakai prompt bawaan. Set RUANG_CONTEXT_DIR bila folder ada di tempat lain.')
+    return
+  }
+  const managerFiles = agentContextFiles(dir, 'manager', CONTEXT_BRAND)
+  if (managerFiles) {
+    CEO_AGENT.systemPrompt += `\n\nDi brand Official OTCA Anda juga menjalankan peran Manager (/context/agents/manager.md); routing mengikuti /context/_shared/raci.md.\n\n${contextPrompt(managerFiles)}`
+  }
+  for (const agent of OTCA_AGENTS) {
+    const files = agentContextFiles(dir, agent.id, CONTEXT_BRAND)
+    if (!files) continue
+    agent.systemPrompt = `Anda adalah ${agent.name} untuk brand Official OTCA (${agent.role}). Tujuan, tanggung jawab, tool yang boleh dan tidak boleh, approval, dan KPI Anda ditetapkan di /context/agents/${agent.id}.md.${OTCA_RULES}\n\n${contextPrompt(files)}`
+  }
+}
+applyOtcaContext()
+
+// Agents of the earlier built-in crew and the OTCA agent that took over their work.
+const LEGACY_AGENT_IDS: Record<string, string> = { creator: 'video-editor', marketing: 'digital-marketing', researcher: 'content-creator' }
+// Notes the earlier crew started with, so moving their memory keeps only what the user wrote.
+const LEGACY_DEFAULT_NOTES = new Set([
+  'Workspace aktif: d:\\KERJAAN\\CODING\\CLAUDE\\VIDEO_EDITOR',
+  'Pipeline: video-system (tokens, scripts, remotion compositions)',
+  'Gunakan B-roll 60fps untuk transisi slow motion',
+  'Workspace aktif: d:\\KERJAAN\\CODING\\CLAUDE\\AI_OFFICE',
+  'Orkestrasi tim: Marketing, Researcher, Creator',
+  'Optimalkan pesan penawaran utama (USP)',
+  'KPI: CTR (Click-Through Rate) dan Conversion Rate',
+  'Fokus riset: Perkembangan AI, model bahasa, dan otomasi alur kerja'
+])
+
+// The crew always comes from code; nothing about the agents themselves is stored.
+export const CLAUDE_AGENTS: AgentDefinition[] = [CEO_AGENT, ...OTCA_AGENTS]
 
 export interface ChatMessage {
   id: string
@@ -150,18 +245,7 @@ export interface StoredTask {
   /** The agent's reply from the last run. */
   result?: string
   lastError?: string
-  /** 'mirror' when the work is done in a claude.ai Project and only reported to the office. */
-  source?: 'mirror'
-  /** Latest progress line reported for a mirrored task, shown as the agent's speech bubble. */
-  progress?: string
 }
-
-export type ActivityPhase = 'started' | 'progress' | 'done' | 'failed'
-
-// A mirrored task whose Project never reported back stops showing its agent at work after this long.
-const MIRROR_STALE_MS = 2 * 60 * 60 * 1000
-// A mirrored task that just finished keeps its agent at the desk this long, so short work is still seen.
-const MIRROR_FINISH_HOLD_MS = 20_000
 
 export interface ClaudeScheduledJob {
   id: string
@@ -292,11 +376,6 @@ class ClaudeOfficeService {
         const data = JSON.parse(readFileSync(this.storageFile, 'utf8'))
         if (data.config?.apiKey) this.config.apiKey = data.config.apiKey
         if (data.config?.defaultModel) this.config.defaultModel = normalizeModel(data.config.defaultModel)
-        // Offices saved before agents were stored keep the built-in crew.
-        if (Array.isArray(data.agents)) {
-          const saved = (data.agents as AgentDefinition[]).filter((agent) => agent?.id && agent.id !== CEO_ID)
-          CLAUDE_AGENTS.splice(0, CLAUDE_AGENTS.length, CEO_AGENT, ...saved)
-        }
         if (Array.isArray(data.tasks)) this.tasks = data.tasks
         if (Array.isArray(data.scheduledJobs)) this.scheduledJobs = data.scheduledJobs
         if (data.chatHistories && typeof data.chatHistories === 'object') {
@@ -310,10 +389,80 @@ class ClaudeOfficeService {
           }
         }
         if (data.totalUsage) this.totalUsage = data.totalUsage
+        const legacy = this.migrateLegacyCrew()
+        const crew = new Set(CLAUDE_AGENTS.map((agent) => agent.id))
+        // Dropping retired agents deletes their chats and memory, so the file as it was is kept first.
+        if ([...this.chatHistories.keys(), ...this.agentMemories.keys()].some((id) => !crew.has(id))) {
+          copyFileSync(this.storageFile, `${this.storageFile}.sebelum-hapus-project.bak`)
+        }
+        if (this.dropRetiredAgents() || legacy) this.saveStorage()
       }
     } catch {
       // fresh setup
     }
+  }
+
+  /**
+   * Agents registered from claude.ai Projects are gone: their tasks and schedules move to the CEO,
+   * and their chats and memory are dropped. Returns whether anything changed.
+   */
+  private dropRetiredAgents(): boolean {
+    const crew = new Set(CLAUDE_AGENTS.map((agent) => agent.id))
+    let changed = false
+    for (const task of this.tasks) {
+      if (!crew.has(task.assignee)) { task.assignee = CEO_ID; changed = true }
+    }
+    for (const job of this.scheduledJobs) {
+      if (!crew.has(job.agent)) { job.agent = CEO_ID; changed = true }
+    }
+    for (const store of [this.chatHistories, this.agentMemories]) {
+      for (const id of [...store.keys()]) {
+        if (!crew.has(id)) { store.delete(id); changed = true }
+      }
+    }
+    return changed
+  }
+
+  /**
+   * Hands the work of the earlier crew (marketing, researcher, creator) to the OTCA agent that owns it
+   * now: tasks, schedules and chats move over, and notes or context files the user added are kept.
+   * Returns whether anything changed.
+   */
+  private migrateLegacyCrew(): boolean {
+    let changed = false
+    for (const item of this.tasks) {
+      const target = LEGACY_AGENT_IDS[item.assignee]
+      if (target) { item.assignee = target; changed = true }
+    }
+    for (const job of this.scheduledJobs) {
+      const target = LEGACY_AGENT_IDS[job.agent]
+      if (target) { job.agent = target; changed = true }
+    }
+    for (const [legacy, target] of Object.entries(LEGACY_AGENT_IDS)) {
+      const history = this.chatHistories.get(legacy)
+      if (history) {
+        this.chatHistories.set(target, [...(this.chatHistories.get(target) ?? []), ...history])
+        this.chatHistories.delete(legacy)
+        changed = true
+      }
+      const memory = this.agentMemories.get(legacy)
+      if (memory) {
+        const kept = this.getAgentMemory(target)
+        kept.notes.push(...memory.notes.filter((note) => !LEGACY_DEFAULT_NOTES.has(note) && !kept.notes.includes(note)))
+        kept.contextFiles.push(...memory.contextFiles.filter((file) => !kept.contextFiles.some((own) => own.path === file.path)))
+        this.agentMemories.delete(legacy)
+        changed = true
+      }
+    }
+    // The CEO's stored rules still delegating to the old crew are replaced by the current ones.
+    const ceo = this.agentMemories.get(CEO_ID)
+    if (ceo?.claudeRules.includes('Delegasikan tugas visual dan editing ke Creator')) {
+      const fresh = this.getDefaultMemoryForAgent(CEO_ID)
+      ceo.claudeRules = fresh.claudeRules
+      ceo.notes = [...fresh.notes, ...ceo.notes.filter((note) => !LEGACY_DEFAULT_NOTES.has(note))]
+      changed = true
+    }
+    return changed
   }
 
   private saveStorage() {
@@ -323,7 +472,6 @@ class ClaudeOfficeService {
       }
       const data = {
         config: this.config,
-        agents: CLAUDE_AGENTS.filter((agent) => agent.id !== CEO_ID),
         tasks: this.tasks,
         scheduledJobs: this.scheduledJobs,
         chatHistories: Object.fromEntries(this.chatHistories.entries()),
@@ -369,30 +517,30 @@ class ClaudeOfficeService {
         },
         {
           id: 'task-2',
-          title: 'Riset Audiens & Tren Konten',
-          description: 'Menganalisis minat target audiens terhadap teknologi AI',
+          title: 'Insight Pertanyaan Parents Talk',
+          description: 'Rangkum pertanyaan dan masalah yang paling sering muncul di SPS Parents Talk terbaru menjadi daftar angle konten.',
           status: 'todo',
-          assignee: 'researcher',
+          assignee: 'content-creator',
           priority: 2,
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString()
         },
         {
           id: 'task-3',
-          title: 'Konsep Storyboard Video Teaser',
-          description: 'Membuat draft video 30 detik pengenalan produk',
+          title: 'Storyboard Reels Testimoni',
+          description: 'Susun storyboard, shot list, dan edit plan Reels testimoni 30–60 detik dari script yang disetujui.',
           status: 'todo',
-          assignee: 'creator',
+          assignee: 'video-editor',
           priority: 2,
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString()
         },
         {
           id: 'task-4',
-          title: 'Strategi Kampanye Peluncuran',
-          description: 'Merancang sales funnel dan copywriting promosi',
+          title: 'Kalender Konten Minggu Ini',
+          description: 'Susun kalender publikasi Feed, Reels, dan Stories minggu ini dari konten yang sudah approved.',
           status: 'todo',
-          assignee: 'marketing',
+          assignee: 'social-media-manager',
           priority: 2,
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString()
@@ -417,12 +565,12 @@ class ClaudeOfficeService {
           updatedAt: new Date().toISOString()
         },
         {
-          id: 'cron-researcher-trends',
-          name: 'AI & Tech Industry Trends Briefing',
-          agent: 'researcher',
+          id: 'cron-smm-comments',
+          name: 'Daily Comment Triage',
+          agent: 'social-media-manager',
           schedule: '0 8 * * *',
-          description: 'Riset tren kecerdasan buatan terbaru, update model LLM, dan analisis data teknologi industri.',
-          prompt: 'Kumpulkan ringkasan riset tren teknologi AI terbaru dan insight strategis untuk tim.',
+          description: 'Klasifikasi komentar baru, draft balasan FAQ, tandai spam, dan catat lead untuk diteruskan.',
+          prompt: 'Klasifikasikan komentar baru, siapkan draft balasan berdasarkan knowledge base, tandai spam, dan daftar lead yang perlu diteruskan. Semua masih draft untuk approval.',
           status: 'active',
           nextRun: computeNextCronRun('0 8 * * *'),
           repeat: 'Setiap Hari 08:00 WIB',
@@ -430,12 +578,12 @@ class ClaudeOfficeService {
           updatedAt: new Date().toISOString()
         },
         {
-          id: 'cron-marketing-funnel',
-          name: 'Weekly Campaign & Funnel Performance Review',
-          agent: 'marketing',
+          id: 'cron-dm-weekly',
+          name: 'Weekly Campaign Performance Review',
+          agent: 'digital-marketing',
           schedule: '0 10 * * 1',
-          description: 'Evaluasi performa kampanye mingguan, efektivitas copywriting, dan optimasi sales funnel.',
-          prompt: 'Evaluasi strategi pemasaran mingguan dan siapkan rekomendasi penawaran serta headline promosi baru.',
+          description: 'Evaluasi performa campaign mingguan (CTR, CPC, CPL, conversion) dan rekomendasi optimasi.',
+          prompt: 'Evaluasi performa campaign minggu lalu berdasarkan data yang tersedia dan siapkan rekomendasi optimasi untuk approval.',
           status: 'active',
           nextRun: computeNextCronRun('0 10 * * 1'),
           repeat: 'Setiap Senin 10:00 WIB',
@@ -443,12 +591,12 @@ class ClaudeOfficeService {
           updatedAt: new Date().toISOString()
         },
         {
-          id: 'cron-creator-brainstorm',
-          name: 'Viral Hook & Video Script Brainstorming',
-          agent: 'creator',
+          id: 'cron-cc-ideas',
+          name: 'Content Ideas dari Parents Talk',
+          agent: 'content-creator',
           schedule: '0 14 * * 2,4',
-          description: 'Penyusunan 3 konsep video pendek (Shorts/Reels/TikTok) dengan hook 3 detik dan visual pacing.',
-          prompt: 'Rancang 3 konsep naskah video pendek dengan hook visual 3 detik dan arahan editing footage.',
+          description: 'Tiga ide konten (carousel/image/script) dari insight Parents Talk dan feedback sales terbaru.',
+          prompt: 'Susun 3 ide konten dari insight Parents Talk dan feedback sales terbaru, masing-masing dengan angle, pesan utama, format, dan CTA.',
           status: 'active',
           nextRun: computeNextCronRun('0 14 * * 2,4'),
           repeat: 'Selasa & Kamis 14:00 WIB',
@@ -521,142 +669,6 @@ class ClaudeOfficeService {
     return CLAUDE_AGENTS
   }
 
-  /**
-   * Creates or updates the agent of one claude.ai Project. The Project's instructions become the
-   * agent's rules and its knowledge a context file; registering the same Project again updates it.
-   */
-  public upsertProjectAgent(input: {
-    projectName: string
-    agentName?: string
-    role: string
-    description: string
-    instructions: string
-    knowledge?: string
-    projectUrl?: string
-  }): { success: boolean; created: boolean; agent: AgentDefinition } {
-    const projectName = input.projectName.trim()
-    const existing = CLAUDE_AGENTS.find((agent) => agent.id !== CEO_ID && agent.project?.name.toLowerCase() === projectName.toLowerCase())
-    const id = existing?.id ?? agentIdFromName(projectName)
-    if (!existing && CLAUDE_AGENTS.some((agent) => agent.id === id)) {
-      throw new Error(`Id agen "${id}" sudah dipakai agen lain. Hapus agen itu dulu atau pakai nama Project yang berbeda.`)
-    }
-    const instructions = input.instructions.trim().slice(0, MAX_INSTRUCTIONS)
-    const name = (input.agentName || projectName).trim()
-    const agent: AgentDefinition = {
-      id,
-      name,
-      role: input.role.trim(),
-      department: 'Project',
-      model: this.config.defaultModel,
-      seat: existing?.seat ?? Math.max(0, ...CLAUDE_AGENTS.map((item) => item.seat)) + 1,
-      description: input.description.trim(),
-      systemPrompt: `Anda adalah ${name}, agen AI Office yang mewakili Project Claude "${projectName}" milik Pengguna.
-Peran Anda: ${input.role.trim()}.
-${input.description.trim()}
-
-Ikuti instruksi Project (bagian "ATURAN & PEDOMAN KERJA") dan gunakan knowledge Project (bagian "DOKUMEN KONTEKS") sebagai sumber utama. Jawab dalam bahasa yang dipakai Pengguna.`,
-      project: { name: projectName, url: input.projectUrl?.trim() || existing?.project?.url, syncedAt: new Date().toISOString() },
-    }
-    if (existing) CLAUDE_AGENTS[CLAUDE_AGENTS.indexOf(existing)] = agent
-    else CLAUDE_AGENTS.push(agent)
-
-    const memory = existing ? this.getAgentMemory(id) : { workspacePath: this.getAgentWorkspace(CEO_ID), claudeRules: '', notes: [], contextFiles: [] }
-    memory.claudeRules = instructions
-    // A re-sync without knowledge keeps what an earlier sync stored.
-    const knowledge = (input.knowledge || '').trim().slice(0, MAX_KNOWLEDGE)
-    if (knowledge) {
-      memory.contextFiles = memory.contextFiles.filter((file) => file.name !== PROJECT_KNOWLEDGE_FILE)
-      memory.contextFiles.unshift({ name: PROJECT_KNOWLEDGE_FILE, path: `claude.ai/project/${id}`, size: knowledge.length, content: knowledge })
-    }
-    this.agentMemories.set(id, memory)
-    if (!existing) this.initAgentState(id)
-    this.saveStorage()
-    return { success: true, created: !existing, agent }
-  }
-
-  /** An agent by id, or by the name of the claude.ai Project it was registered from. */
-  public resolveAgent(idOrProject: string): AgentDefinition | undefined {
-    const key = idOrProject.trim().toLowerCase()
-    return CLAUDE_AGENTS.find((agent) => agent.id === key || agent.project?.name.toLowerCase() === key)
-  }
-
-  /**
-   * Mirror mode: a claude.ai Project reports work it is doing itself. "started" opens a running task
-   * (its agent shows as working in the office), "progress" updates the speech bubble, "done" stores the
-   * summary and moves the task to review, "failed" puts it back to todo with the error.
-   */
-  public reportActivity(input: { agent: string; phase: ActivityPhase; title?: string; detail?: string; activityId?: string }): { success: boolean; activityId: string; agent: string; status: string } {
-    const agent = this.resolveAgent(input.agent)
-    if (!agent) throw new Error(`Agen "${input.agent}" tidak ada. Agen yang tersedia: ${CLAUDE_AGENTS.map((item) => item.id).join(', ')}.`)
-    const now = new Date().toISOString()
-    const detail = (input.detail || '').trim()
-    let task = input.activityId ? this.tasks.find((item) => item.id === input.activityId) : undefined
-    if (input.activityId && !task) throw new Error(`Aktivitas ${input.activityId} tidak ditemukan.`)
-    if (!task) {
-      if (input.phase === 'progress') throw new Error('Laporan progress butuh activity_id dari laporan "started".')
-      if (!input.title?.trim()) throw new Error('title wajib diisi untuk aktivitas baru.')
-      task = {
-        id: `task-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-        title: input.title.trim(),
-        description: `Dikerjakan di Project claude.ai "${agent.project?.name ?? agent.name}".${input.phase === 'started' && detail ? `
-
-${detail}` : ''}`,
-        status: 'running',
-        assignee: agent.id,
-        priority: 2,
-        createdAt: now,
-        updatedAt: now,
-        startedAt: now,
-        source: 'mirror',
-      }
-      this.tasks.unshift(task)
-    }
-    task.updatedAt = now
-    if (input.phase === 'started' || input.phase === 'progress') {
-      task.status = 'running'
-      if (input.phase === 'progress' && detail) task.progress = detail.slice(0, 120)
-    } else if (input.phase === 'done') {
-      task.status = 'review'
-      task.result = detail || 'Selesai dikerjakan di Project claude.ai.'
-      task.completedAt = now
-      task.progress = undefined
-      this.chatHistories.get(agent.id)?.push({
-        id: `msg-${Date.now()}`,
-        role: 'assistant',
-        content: `📋 **Dikerjakan di Project claude.ai: ${task.title}**
-
-${task.result}`,
-        timestamp: now,
-      })
-    } else {
-      task.status = 'todo'
-      task.lastError = detail || 'Gagal dikerjakan di Project claude.ai.'
-      task.progress = undefined
-    }
-    const state = this.agentStates.get(agent.id)
-    if (state) state.lastActive = now
-    this.saveStorage()
-    return { success: true, activityId: task.id, agent: agent.id, status: task.status }
-  }
-
-  /** Removes an agent (never the CEO). Its tasks and scheduled jobs move to the CEO. */
-  public removeAgent(agentId: string): { success: boolean; message: string } {
-    if (agentId === CEO_ID) throw new Error('CEO tidak bisa dihapus.')
-    const index = CLAUDE_AGENTS.findIndex((agent) => agent.id === agentId)
-    if (index < 0) throw new Error(`Agen ${agentId} tidak ditemukan.`)
-    const [removed] = CLAUDE_AGENTS.splice(index, 1)
-    let moved = 0
-    for (const item of [...this.tasks, ...this.scheduledJobs]) {
-      if ('assignee' in item && item.assignee === agentId) { item.assignee = CEO_ID; moved += 1 }
-      if ('agent' in item && item.agent === agentId) { item.agent = CEO_ID; moved += 1 }
-    }
-    this.chatHistories.delete(agentId)
-    this.agentMemories.delete(agentId)
-    this.agentStates.delete(agentId)
-    this.saveStorage()
-    return { success: true, message: `Agen ${removed.name} dihapus.${moved ? ` ${moved} tugas/jadwal dipindahkan ke CEO.` : ''}` }
-  }
-
   public getHistory(agentId: string): ChatMessage[] {
     return this.chatHistories.get(agentId) || []
   }
@@ -693,64 +705,52 @@ ${task.result}`,
   }
 
   public getDefaultMemoryForAgent(agentId: string): AgentMemoryData {
-    if (agentId === 'creator') {
-      return {
-        workspacePath: 'd:\\KERJAAN\\CODING\\CLAUDE\\VIDEO_EDITOR',
-        claudeRules: `# Video Editor & Creative Guidelines
-- Framework: Remotion (React Video) & Motion Pipeline
-- Format: 9:16 (Shorts/TikTok/Reels) & 16:9 (YouTube)
-- Pacing: Dynamic cut setiap 2-3 detik mengikuti beat audio
-- Hook 3 Detik: Hook visual dan narasi kuat untuk menghentikan scrolling
-- Visual Style: Teks dinamis on-screen, transisi punchy, dan color contrast bersih
-- Audio: Audio ducking otomatis ketika voiceover aktif`,
-        notes: [
-          'Workspace aktif: d:\\KERJAAN\\CODING\\CLAUDE\\VIDEO_EDITOR',
-          'Pipeline: video-system (tokens, scripts, remotion compositions)',
-          'Gunakan B-roll 60fps untuk transisi slow motion'
-        ],
-        contextFiles: []
-      }
-    }
-    if (agentId === 'ceo') {
-      return {
-        workspacePath: 'd:\\KERJAAN\\CODING\\CLAUDE\\AI_OFFICE',
-        claudeRules: `# CEO Orchestration Guidelines
-- Analisis kebutuhan dan buat rencana eksekusi terstruktur
-- Delegasikan tugas visual dan editing ke Creator
-- Delegasikan riset pasar dan data industri ke Researcher
-- Delegasikan strategi kampanye dan copywriting ke Marketing
-- Koordinasikan rapat tim di ruang meeting bila diperlukan`,
-        notes: [
-          'Workspace aktif: d:\\KERJAAN\\CODING\\CLAUDE\\AI_OFFICE',
-          'Orkestrasi tim: Marketing, Researcher, Creator'
-        ],
-        contextFiles: []
-      }
-    }
-    if (agentId === 'marketing') {
-      return {
-        workspacePath: 'd:\\KERJAAN\\CODING\\CLAUDE\\AI_OFFICE',
-        claudeRules: `# Marketing & Sales Strategy Guidelines
-- Formula Copywriting: AIDA (Attention, Interest, Desire, Action) atau PAS (Problem, Agitate, Solve)
-- Target Pasar: Kreator digital, developer, dan digital agency
-- Fokus: Pertumbuhan organik, social proof, dan konversi sales funnel`,
-        notes: [
-          'Optimalkan pesan penawaran utama (USP)',
-          'KPI: CTR (Click-Through Rate) dan Conversion Rate'
-        ],
-        contextFiles: []
-      }
-    }
-    return {
-      workspacePath: 'd:\\KERJAAN\\CODING\\CLAUDE\\AI_OFFICE',
-      claudeRules: `# Research & Analysis Guidelines
-- Sajikan data akurat, valid, dan berorientasi fakta
-- Buat ringkasan eksekutif dan rekomendasi konkret di awal laporan
-- Analisis kompetitor dan tren teknologi terbaru secara komprehensif`,
-      notes: [
-        'Fokus riset: Perkembangan AI, model bahasa, dan otomasi alur kerja'
-      ],
-      contextFiles: []
+    const office = 'd:\\KERJAAN\\CODING\\CLAUDE\\AI_OFFICE'
+    const memory = (workspacePath: string, claudeRules: string, notes: string[]): AgentMemoryData =>
+      ({ workspacePath, claudeRules, notes, contextFiles: [] })
+    switch (agentId) {
+      case CEO_ID:
+        return memory(office, `# CEO Orchestration Guidelines
+- Pecah permintaan menjadi subtugas dengan satu pemilik masing-masing (RACI di docs/otca-agents.md)
+- Kirim brief ringkas ke agen, bukan seluruh percakapan
+- Kumpulkan hasil untuk approval Mbak Nia / reviewer sebelum dipakai publik`, [
+          `Workspace aktif: ${office}`,
+          'Tim: Event Specialist, Content Creator, Video Editor, Social Media Manager, Digital Marketing'
+        ])
+      case 'event-specialist':
+        return memory(office, `# Event Specialist Guidelines
+- Alur: Requirement → Tema (approval) → paralel Creative / TOR+SKB / LP → approval → paralel Ads / PPT → Event Ready
+- Tiga image ads = tiga angle berbeda, bukan tiga headline untuk masalah yang sama
+- TOR, SKB, LP, dan campaign Meta Ads selalu memakai template resmi OTCA`, [
+          'SKB: ikuti template resmi OTCA, jangan menebak kepanjangannya'
+        ])
+      case 'content-creator':
+        return memory(office, `# Content Creator Guidelines
+- Sumber: SPS Parents Talk, feedback sales & chat export, product knowledge, brand guidelines, event & promo
+- Setiap konten: problem → angle → pesan utama → format → CTA
+- Copywriting: AIDA atau PAS; bahasa yang dekat dengan parents dan students`, [
+          'Pakai pustaka insight bersama; jangan mengolah ulang chat export mentah bila insight sudah ada'
+        ])
+      case 'video-editor':
+        return memory('d:\\KERJAAN\\CODING\\CLAUDE\\VIDEO_EDITOR', `# Video Editor Guidelines
+- Pipeline: Remotion & FFmpeg di video-system; keluarkan edit plan yang bisa langsung dieksekusi
+- Format: 9:16 untuk Reels/Stories, 1:1 atau 4:5 untuk Feed, 16:9 bila diminta
+- Hook 3 detik pertama, subtitle wajib, audio ducking saat voiceover
+- QC: visual, audio, subtitle, dan durasi sebelum diajukan approval`, [
+          'Workspace aktif: d:\\KERJAAN\\CODING\\CLAUDE\\VIDEO_EDITOR\\video-system'
+        ])
+      case 'social-media-manager':
+        return memory(office, `# Social Media Manager Guidelines
+- Platform: Instagram (Feed, Reels, Stories) dan Facebook lewat Meta Business Suite
+- Balasan otomatis hanya untuk FAQ yang ada di knowledge base; sisanya draft untuk review
+- Lead: arahkan ke landing page, WhatsApp, atau sales dan catat di laporan`, [])
+      case 'digital-marketing':
+        return memory(office, `# Digital Marketing Guidelines
+- Setiap campaign: objective → audience → creative → destination → tracking → KPI
+- KPI: CTR, CPC, CPM, CPL, conversion rate, ROAS (bila data tersedia)
+- Aktivasi iklan dan perubahan budget hanya setelah otorisasi pemegang budget`, [])
+      default:
+        return memory(office, '', [])
     }
   }
 
@@ -765,7 +765,7 @@ ${task.result}`,
 
   public getAgentWorkspace(agentId: string): string {
     const mem = this.getAgentMemory(agentId)
-    return mem.workspacePath || (agentId === 'creator' ? 'd:\\KERJAAN\\CODING\\CLAUDE\\VIDEO_EDITOR' : 'd:\\KERJAAN\\CODING\\CLAUDE\\AI_OFFICE')
+    return mem.workspacePath || this.getDefaultMemoryForAgent(agentId).workspacePath
   }
 
   public setAgentWorkspace(agentId: string, newPath: string): { success: boolean; path: string; files: string[]; error?: string } {
@@ -935,6 +935,11 @@ ${task.result}`,
     }
   }
 
+  /** The model an agent works with. */
+  public modelFor(agent: AgentDefinition): string {
+    return normalizeModel(agent.model || this.config.defaultModel)
+  }
+
   public async sendMessage(
     agentId: string,
     userText: string,
@@ -968,8 +973,11 @@ ${task.result}`,
 
     // Build context with current tasks & other agents
     const otherAgentsList = CLAUDE_AGENTS.map((a) => `- ${a.name} (id: ${a.id}): ${a.role} - ${a.description}`).join('\n')
+    // Open work only, newest first and capped: finished tasks and long descriptions cost tokens on every call.
     const activeTasksList = this.tasks
-      .map((t) => `[${t.status.toUpperCase()}] ${t.title} (PIC: ${t.assignee}) - ${t.description}`)
+      .filter((t) => t.status !== 'done')
+      .slice(0, 20)
+      .map((t) => `[${t.status.toUpperCase()}] ${t.title} (PIC: ${t.assignee})${t.description ? ` - ${t.description.slice(0, 160)}` : ''}`)
       .join('\n')
 
     const mem = this.getAgentMemory(agentId)
@@ -987,15 +995,16 @@ ${task.result}`,
       }
     }
 
-    const enhancedSystemPrompt = `${agent.systemPrompt}
+    // The stable part (role, team, memory) comes first and is cached; the task board changes often, so it
+    // follows the cache breakpoint and never invalidates it.
+    const stableSystemPrompt = `${agent.systemPrompt}
 
 Informasi Ruang Kantor & Tim Claude:
-${otherAgentsList}
-
-Daftar Tugas Tim di Task Board (Kanban):
-${activeTasksList || 'Belum ada tugas tercatat.'}${memoryPrompt}
+${otherAgentsList}${memoryPrompt}
 
 Format balasan gunakan Markdown yang rapi dengan heading, bullet points, dan penekanan teks bila perlu.`
+    const boardPrompt = `Daftar Tugas Tim di Task Board (Kanban):
+${activeTasksList || 'Belum ada tugas tercatat.'}`
 
     // Prepare tools for CEO or agents
     const tools: Anthropic.Tool[] = []
@@ -1074,9 +1083,12 @@ Format balasan gunakan Markdown yang rapi dengan heading, bullet points, dan pen
 
       // Call Anthropic API with streaming
       const stream = await this.anthropicClient.messages.create({
-        model: this.config.defaultModel,
+        model: this.modelFor(agent),
         max_tokens: 3000,
-        system: enhancedSystemPrompt,
+        system: [
+          { type: 'text', text: stableSystemPrompt, cache_control: { type: 'ephemeral' } },
+          { type: 'text', text: boardPrompt }
+        ],
         messages: apiMessages,
         tools: tools.length > 0 ? tools : undefined,
         stream: true
@@ -1257,42 +1269,42 @@ Halo! Sebagai **CEO (Claude 5.5 Orchestrator)**, saya telah memanggil seluruh ti
 Anda dapat melihat seluruh avatar kami berjalan dan berkumpul di meja rapat di kantor 3D! Apa arahan selanjutnya yang ingin Anda berikan?`
       } else if (isDelegatePrompt) {
         const res1 = await this.handleToolCall('delegate_task', {
-          target_agent: 'marketing',
-          task_title: 'Riset Pasar & Strategi Peluncuran',
-          task_description: `Analisis target audiens dan susun strategi penjualan untuk: "${userText}"`,
-          priority: 3
+          target_agent: 'digital-marketing',
+          task_title: 'Strategi Campaign & KPI',
+          task_description: `Tentukan objective, audiens, dan KPI campaign untuk: "${userText}"`,
+          priority: 3,
         })
         const res2 = await this.handleToolCall('delegate_task', {
-          target_agent: 'creator',
-          task_title: 'Storyboarding & Video Hook 3 Detik',
-          task_description: `Rancang konsep naskah video pendek viral untuk: "${userText}"`,
-          priority: 2
+          target_agent: 'content-creator',
+          task_title: 'Angle & Content Brief',
+          task_description: `Susun angle, pesan utama, dan content brief untuk: "${userText}"`,
+          priority: 2,
         })
         toolResults.push(
-          { name: 'delegate_task', args: { target_agent: 'marketing', task_title: 'Riset Pasar & Strategi Peluncuran' }, result: res1 },
-          { name: 'delegate_task', args: { target_agent: 'creator', task_title: 'Storyboarding & Video Hook 3 Detik' }, result: res2 }
+          { name: 'delegate_task', args: { target_agent: 'digital-marketing', task_title: 'Strategi Campaign & KPI' }, result: res1 },
+          { name: 'delegate_task', args: { target_agent: 'content-creator', task_title: 'Angle & Content Brief' }, result: res2 }
         )
         reply = `> ⚠️ *Mode simulasi: API key belum terhubung, balasan ini bukan dari Claude.*
 
 Instruksi Anda telah saya terima dan langsung saya bagi ke tim:
 
-1. 🎯 **Marketing & Sales**: Ditugaskan menyusun riset pasar dan strategi penawaran.
-2. 🎬 **Creator (Video Editor)**: Ditugaskan merancang konsep video dan naskah hook 3 detik.
+1. 🎯 **Digital Marketing Specialist**: Ditugaskan menyusun strategi campaign dan KPI.
+2. ✍️ **Content Creator**: Ditugaskan menyusun angle dan content brief.
 
 Kartu tugas baru telah ditambahkan ke **Task Board (Kanban)**, dan avatar mereka kini mulai bekerja di meja kerja masing-masing!`
       } else {
         reply = `> ⚠️ *Mode simulasi: API key belum terhubung, balasan ini bukan dari Claude.*
 
-Halo! Saya adalah **CEO (Claude Orchestrator)** di AI Office ini. Saya siap mengkoordinasikan tim Marketing, Researcher, dan Video Editor untuk proyek Anda.
+Halo! Saya adalah **CEO (Claude Orchestrator)** di AI Office ini. Saya siap mengkoordinasikan tim Event Specialist, Content Creator, Video Editor, Social Media Manager, dan Digital Marketing untuk proyek Anda.
 
 Coba uji kemampuan orkestrasi saya dengan perintah berikut:
 - *"Bagi tugas untuk kampanye peluncuran produk baru"*
 - *"Panggil seluruh tim untuk rapat evaluasi"*`
       }
-    } else if (agentId === 'marketing') {
+    } else if (agentId === 'digital-marketing') {
       reply = `> ⚠️ *Mode simulasi: API key belum terhubung, balasan ini bukan dari Claude.*
 
-Halo! Saya **Marketing & Sales Lead**. Terkait permintaan Anda: **"${userText}"**, berikut strategi awal yang saya siapkan:
+Halo! Saya **AI Digital Marketing Specialist**. Terkait permintaan Anda: **"${userText}"**, berikut strategi awal yang saya siapkan:
 
 ### 1. Target Audiens & Persona
 - Profesional muda & kreator digital (usia 20-35 tahun).
@@ -1302,20 +1314,25 @@ Halo! Saya **Marketing & Sales Lead**. Terkait permintaan Anda: **"${userText}"*
 - *"Tingkatkan Produktivitas Anda dengan Tim AI Virtual Sendiri."*
 - *"Kelola Bisnis Seperti Punya Kantor dan Tim Ahli di Samping Anda."*
 
-Saya siap berkoordinasi lebih lanjut dengan tim Researcher dan Creator!`
-    } else if (agentId === 'researcher') {
+Saya siap berkoordinasi lebih lanjut dengan Content Creator dan Video Editor!`
+    } else if (agentId === 'content-creator') {
       reply = `> ⚠️ *Mode simulasi: API key belum terhubung, balasan ini bukan dari Claude.*
 
-Halo! Saya **Lead Researcher & Analyst**. Saya telah mengumpulkan beberapa insight awal untuk topik: **"${userText}"**:
+Halo! Saya **AI Content Creator**. Saya telah mengumpulkan beberapa insight awal untuk topik: **"${userText}"**:
 
 ### 📊 Temuan Utama:
 1. **Tren Pasar**: Minat terhadap AI agent interaktif meningkat pesat di kalangan pengembang dan agensi digital.
 2. **Kebutuhan Pengguna**: Visualisasi aktivitas agen (3D avatar) meningkatkan rasa percaya dan keterlibatan pengguna dibanding chat teks biasa.
 3. **Rekomendasi**: Prioritaskan format konten video pendek yang memperlihatkan demo langsung fitur-fitur kantor virtual.`
+    } else if (agentId !== 'video-editor') {
+      const agent = CLAUDE_AGENTS.find((item) => item.id === agentId)
+      reply = `> ⚠️ *Mode simulasi: API key belum terhubung, balasan ini bukan dari Claude.*
+
+Halo! Saya **${agent?.name ?? agentId}** (${agent?.role ?? 'Agen AI Office'}). Permintaan **"${userText}"** sudah saya catat dan akan saya kerjakan begitu API key Claude terhubung.`
     } else {
       reply = `> ⚠️ *Mode simulasi: API key belum terhubung, balasan ini bukan dari Claude.*
 
-Halo! Saya **Creative Director & Video Editor**. Berikut konsep video yang saya rancang untuk: **"${userText}"**:
+Halo! Saya **AI Video Editor**. Berikut konsep video yang saya rancang untuk: **"${userText}"**:
 
 ### 🎬 Konsep Video Pendek (Reels / TikTok):
 - **Detik 0 - 3 (Hook)**: Visual avatar 3D mulai mengetik cepat di meja. Narasi: *"Gimana rasanya punya kantor virtual sendiri yang diisi AI?"*
@@ -1416,13 +1433,9 @@ Halo! Saya **Creative Director & Video Editor**. Berikut konsep video yang saya 
     const stations: OfficeStation[] = CLAUDE_AGENTS.map((agent) => {
       const live = this.agentStates.get(agent.id)!
       // The office follows the board: an idle agent with a running task sits at its desk working on it.
-      const running = this.tasks.find((task) => task.assignee === agent.id && task.status === 'running' &&
-        (task.source !== 'mirror' || Date.now() - Date.parse(task.updatedAt) < MIRROR_STALE_MS))
-      const finished = running ? undefined : this.tasks.find((task) => task.assignee === agent.id && task.source === 'mirror' &&
-        task.status === 'review' && task.completedAt && Date.now() - Date.parse(task.completedAt) < MIRROR_FINISH_HOLD_MS)
+      const running = this.tasks.find((task) => task.assignee === agent.id && task.status === 'running')
       const s = live.state !== 'Idle' || this.isMeetingActive ? live
-        : running ? { ...live, state: 'Working' as const, room: 'Workspace' as const, roomPosition: 'assigned-desk', currentTask: running.title, activity: running.progress || `Mengerjakan: ${running.title}` }
-        : finished ? { ...live, state: 'Reviewing' as const, room: 'Workspace' as const, roomPosition: 'assigned-desk', currentTask: finished.title, activity: `Selesai: ${finished.title}` }
+        : running ? { ...live, state: 'Working' as const, room: 'Workspace' as const, roomPosition: 'assigned-desk', currentTask: running.title, activity: `Mengerjakan: ${running.title}` }
         : live
       return {
         id: agent.id,
@@ -1435,7 +1448,7 @@ Halo! Saya **Creative Director & Video Editor**. Berikut konsep video yang saya 
         recentActivity: s.activity || 'Menunggu arahan',
         activity: this.isMeetingActive ? `Rapat: ${this.meetingAgenda || 'Koordinasi Tim'}` : s.activity,
         seat: agent.seat,
-        provenance: `Claude AI Model (${this.config.defaultModel})`,
+        provenance: `Claude AI Model (${this.modelFor(agent)})`,
         freshness: s.lastActive
       }
     })
@@ -1464,7 +1477,7 @@ Halo! Saya **Creative Director & Video Editor**. Berikut konsep video yang saya 
         availability: 'available',
         data: CLAUDE_AGENTS.map((a) => ({
           name: a.id,
-          model: this.config.defaultModel,
+          model: this.modelFor(a),
           gateway: 'Running' as const
         }))
       },
@@ -1523,7 +1536,7 @@ Halo! Saya **Creative Director & Video Editor**. Berikut konsep video yang saya 
           startedAt: t.startedAt,
           completedAt: t.completedAt,
           workspace: mem?.workspacePath || process.cwd(),
-          model: agent?.model || this.config.defaultModel,
+          model: agent ? this.modelFor(agent) : this.config.defaultModel,
           skills: ['claude-agent-sdk', 'task-orchestration'],
           parents: [],
           children: [],

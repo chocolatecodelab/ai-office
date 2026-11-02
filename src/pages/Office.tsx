@@ -77,10 +77,10 @@ import { AgentChat } from '../components/AgentChat.tsx'
 type DetailTab = 'Chat' | 'Overview' | 'Folder' | 'Memory'
 const DETAIL_TABS: DetailTab[] = ['Chat', 'Overview', 'Folder', 'Memory']
 
-export function OfficeDetail({ station, onClose }: { station: OfficeStation; onClose: () => void }) {
+export function OfficeDetail({ station, onClose, initialTab = 'Chat' }: { station: OfficeStation; onClose: () => void; initialTab?: DetailTab }) {
   const closeRef = useRef<HTMLButtonElement>(null)
   const dialogRef = useRef<HTMLElement>(null)
-  const [tab, setTab] = useState<DetailTab>('Chat')
+  const [tab, setTab] = useState<DetailTab>(initialTab)
   useEffect(() => { closeRef.current?.focus() }, [])
   const badge = officeStateBadge(station.state)
   const profile = station.id

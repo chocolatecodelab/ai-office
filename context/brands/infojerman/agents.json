@@ -1,0 +1,24 @@
+{
+  "brand": "Info Jerman",
+  "slug": "infojerman",
+  "active_agents": [
+    "manager",
+    "content-creator",
+    "video-editor",
+    "social-media-manager"
+  ],
+  "platforms": [
+    "Instagram",
+    "Facebook",
+    "TikTok"
+  ],
+  "budget_soft_cap_usd": {
+    "pool_umum": 5,
+    "pool_video": 5,
+    "pool_gambar": 2
+  },
+  "brief_to_otca": [
+    "digital-marketing",
+    "event-specialist"
+  ]
+}

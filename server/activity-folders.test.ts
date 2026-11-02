@@ -100,7 +100,8 @@ describe('agent folders', () => {
   })
   afterAll(() => { rmSync(home, { recursive: true, force: true }); rmSync(outside, { recursive: true, force: true }) })
 
-  it('resolves the Hermes root like Hermes does', () => {
+  // POSIX paths: Hermes runs on Linux (containers); Windows resolves them against a drive letter.
+  it.skipIf(process.platform === 'win32')('resolves the Hermes root like Hermes does', () => {
     expect(hermesRoot({}, '/home/u')).toBe('/home/u/.hermes')
     expect(hermesRoot({ HERMES_HOME: '/home/u/.hermes/profiles/coder' }, '/home/u')).toBe('/home/u/.hermes')
     expect(hermesRoot({ HERMES_HOME: '/opt/data/profiles/coder' }, '/home/u')).toBe('/opt/data')

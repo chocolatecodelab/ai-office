@@ -1,0 +1,85 @@
+{
+  "brand": "Info Jerman",
+  "status": "RESMI",
+  "source": "Info Jerman Brand Guideline 2026",
+  "colors": {
+    "warm_cream": "#F7F1E2",
+    "charcoal": "#25272B",
+    "golden_yellow": "#F3CF45",
+    "white": "#FFFFFF"
+  },
+  "color_roles": {
+    "#F7F1E2": "latar utama / ruang bernapas",
+    "#25272B": "judul / kontras",
+    "#F3CF45": "aksen / tombol",
+    "#FFFFFF": "area konten / kartu"
+  },
+  "color_ratio": {
+    "cream": 55,
+    "charcoal": 25,
+    "white": 15,
+    "yellow": 5
+  },
+  "fonts": {
+    "display": {
+      "family": "Lato",
+      "weight": "Black"
+    },
+    "body": {
+      "family": "Lato",
+      "weight": "Regular"
+    },
+    "size_px_feed_1080x1350": {
+      "headline": [
+        68,
+        84
+      ],
+      "subhead": [
+        34,
+        42
+      ],
+      "body": [
+        27,
+        34
+      ],
+      "cta": [
+        30,
+        36
+      ]
+    }
+  },
+  "formats": {
+    "feed_portrait": {
+      "w": 1080,
+      "h": 1350,
+      "margin": [
+        70,
+        85
+      ]
+    },
+    "story_reels": {
+      "w": 1080,
+      "h": 1920
+    },
+    "feed_square": {
+      "w": 1080,
+      "h": 1080
+    },
+    "ads_landscape": {
+      "w": 1200,
+      "h": 628
+    }
+  },
+  "logo": {
+    "note": "Pakai master logo resmi INFO JERMAN by OTCA resolusi tinggi; jangan ambil dari tangkapan layar",
+    "safe_area": "minimal setinggi huruf 'I' di setiap sisi"
+  },
+  "rules": [
+    "Maksimal 2 bobot font dominan (Black + Regular)",
+    "Cukup 1 headline utama per materi",
+    "Teks charcoal di atas kuning; hindari putih di atas kuning",
+    "Kuning sebagai aksen fokus, bukan latar dominan",
+    "Foto: potret ramah, wajah jelas, busana rapi; arsitektur Jerman sebagai konteks, bukan pengalah subjek",
+    "Hindari CTA terlalu dekat tepi atau terpotong antarmuka platform"
+  ]
+}

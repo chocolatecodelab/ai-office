@@ -1,6 +1,6 @@
-// MCP server for Claude Desktop / Claude Code: lets a Claude chat drive the AI Office.
-// It talks to the running office server over its HTTP API, so the 3D office, the Kanban
-// board and the chat history all stay in one place. Start the office first (npm run dev
+// MCP server for Claude Code: lets a local Claude session read and drive the AI Office.
+// It talks to the running office server over its HTTP API, so the 3D office and the Kanban
+// board stay in one place. Start the office first (npm run dev
 // or npm start), then point the MCP client at `npm run mcp` (stdio).
 //
 // Settings (environment):
@@ -57,26 +57,9 @@ async function api<T>(path: string, init?: { method?: string; body?: unknown }):
   return (await call(path, init)).json() as Promise<T>
 }
 
-/** Sends one chat message and waits for the streamed reply (Server-Sent Events) to finish. */
-async function chat(agent: string, message: string): Promise<{ response: string; toolResults?: unknown[] }> {
-  const response = await call('/api/chat', { method: 'POST', body: { agentId: agent, message } })
-  const text = await response.text()
-  for (const line of text.split('\n')) {
-    if (!line.startsWith('data: ')) continue
-    const event = JSON.parse(line.slice(6)) as { type: string; response?: string; toolResults?: unknown[]; error?: string }
-    if (event.type === 'error') throw new OfficeError(event.error || 'Agen gagal membalas.')
-    if (event.type === 'done') return { response: event.response ?? '', toolResults: event.toolResults }
-  }
-  throw new OfficeError('Balasan agen terputus sebelum selesai.')
-}
-
 const httpBackend: OfficeBackend = {
   office: () => api('/api/office'),
   agents: () => api('/api/claude/agents'),
-  registerProjectAgent: (input) => api('/api/claude/agents', { method: 'POST', body: input }),
-  reportActivity: (input) => api('/api/claude/activity', { method: 'POST', body: input }),
-  removeAgent: (agentId) => api(`/api/claude/agents/${encodeURIComponent(agentId)}`, { method: 'DELETE' }),
-  chat,
   tasks: async () => (await api<{ tasks: { data?: BoardTask[] } }>('/api/tasks')).tasks.data ?? [],
   task: (id) => api(`/api/tasks/${encodeURIComponent(id)}`),
   createTask: (task) => api('/api/tasks', { method: 'POST', body: task }),

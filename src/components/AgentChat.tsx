@@ -33,7 +33,7 @@ export function AgentChat({ station, onStationUpdated, onSwitchTab }: AgentChatP
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    messagesEndRef.current?.scrollIntoView?.({ behavior: 'smooth' })
   }
 
   // Check Claude config & load history
@@ -282,10 +282,9 @@ export function AgentChat({ station, onStationUpdated, onSwitchTab }: AgentChatP
     ]
   }
 
-  // Agents registered from a claude.ai Project have no tailored prompts.
   const agentPrompts = quickPrompts[station.id] || [
     'Apa saja yang bisa kamu kerjakan sesuai peranmu?',
-    'Buatkan rencana kerja minggu ini untuk Project ini.',
+    'Buatkan rencana kerja minggu ini.',
     'Ringkas aturan kerja dan knowledge yang kamu pegang.'
   ]
 

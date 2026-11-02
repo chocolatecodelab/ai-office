@@ -1,0 +1,23 @@
+{
+  "brand": "Ciao Manda",
+  "slug": "ciaomanda",
+  "active_agents": [
+    "manager",
+    "content-creator",
+    "video-editor",
+    "social-media-manager"
+  ],
+  "platforms": [
+    "TikTok",
+    "Instagram Reels"
+  ],
+  "budget_soft_cap_usd": {
+    "pool_umum": 5,
+    "pool_video": 5,
+    "pool_gambar": 2
+  },
+  "brief_to_otca": [
+    "digital-marketing",
+    "event-specialist"
+  ]
+}

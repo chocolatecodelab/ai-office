@@ -28,7 +28,9 @@ describe('Office detail dialog focus', () => {
     await act(async () => { trigger.click() })
     const close = document.querySelector<HTMLButtonElement>('.office-close')!
     const tabs = [...document.querySelectorAll<HTMLButtonElement>('.detail-tabs button')]
-    expect(tabs.map((tab) => tab.textContent)).toEqual(['Overview', 'Folder', 'Memory'])
+    expect(tabs.map((tab) => tab.textContent)).toEqual(['Chat', 'Overview', 'Folder', 'Memory'])
+    // On Overview the last focusable control is the last tab (Chat ends with its message box).
+    await act(async () => { tabs[1].click() })
     const last = tabs[tabs.length - 1]
     // Tab from the last control wraps to the first (Close); Shift+Tab from Close wraps back.
     last.focus()
