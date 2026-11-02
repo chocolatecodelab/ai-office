@@ -2,7 +2,7 @@ import { agentLabel } from '../format.ts'
 import type { OfficeSnapshot, RuntimeSnapshot } from '../types.ts'
 import { usePolling } from '../polling.ts'
 import { EmptyState, LoadingState, PageTitle, RuntimeBadge } from '../ui.tsx'
-import { PixelCharacter } from './Office.tsx'
+import { PixelCharacter } from './OfficeDetails.tsx'
 
 /** Every Hermes profile on this machine is an agent, plus OpenCode when it is installed. */
 export function Agents({ runtime, pending = false }: { runtime: RuntimeSnapshot | null; pending?: boolean }) {

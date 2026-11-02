@@ -1626,8 +1626,97 @@ aside.office-panel { background: color-mix(in srgb, var(--surface) 96%, transpar
 .approval-head h2 { font-size: 20px; letter-spacing: -.02em; margin: 4px 0 0; }
 @media (max-width: 900px) { .office-grid { grid-template-columns: 1fr; } .question-inputs, .office-detail-fields { grid-template-columns: 1fr; } }
 
-/* K0 test bench (src/pages/Lab3D.tsx). */
-.lab-3d { display: grid; grid-template-rows: auto 1fr; height: calc(100vh - 120px); min-height: 480px; margin-top: 18px; border: 1px solid var(--border); }
-.lab-3d-bar { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; padding: 10px 14px; font: 12px ui-monospace, monospace; color: var(--text-muted); border-bottom: 1px solid var(--border); }
-.lab-3d-bar input { width: 64px; background: var(--surface); color: var(--text); border: 1px solid var(--border-strong); }
-.lab-3d-floors { margin-top: 0; }
+.blueprint-office-bar { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; padding: 10px 14px; color: var(--text-muted); border-bottom: 1px solid var(--border); }
+.blueprint-office { padding: 12px; overflow: auto; width: 100%; }
+.blueprint-office-bar button { background: var(--surface); color: var(--text); border: 1px solid var(--border-strong); border-radius: 6px; padding: 8px 12px; cursor: pointer; }
+.blueprint-scene { height: min(65vh, 760px); min-height: 340px; }
+.blueprint-crew { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 0; }
+.blueprint-crew button { text-align: left; display: grid; gap: 6px; min-width: 170px; }
+.room-controls { margin: 16px 0; }
+.room-controls header { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.room-controls h2 { font-size: 18px; }
+.room-controls p { color: var(--text-muted); font-size: 12px; }
+.room-control-grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(190px,1fr)); gap: 10px; }
+.room-control-grid h3 { font-size: 14px; margin: 0; }
+.room-controls button { background: var(--surface); color: var(--text); border: 1px solid var(--border-strong); border-radius: 6px; padding: 7px 10px; cursor: pointer; margin-right: 6px; }
+
+/* Office: the scene is the primary surface; secondary controls stay in compact drawers. */
+.blueprint-office { position: relative; padding: 8px 12px 16px; }
+.blueprint-office-bar { gap: 8px; padding: 8px 0 12px; }
+.blueprint-office-bar strong { font-size: 15px; margin-right: auto; }
+.blueprint-office-bar > span { flex-basis: 100%; order: 2; font-size: 11px; }
+.blueprint-office-bar button { font: inherit; font-size: 11px; padding: 7px 9px; }
+.blueprint-office > .chip-row { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 0; }
+.blueprint-scene { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; height: min(70vh,800px); }
+.office-dock { margin-top: 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+.office-dock > summary { cursor: pointer; padding: 12px; font-size: 12px; }
+.office-dock > summary span { float: right; color: var(--text-muted); font-size: 11px; }
+.office-dock .room-controls { padding: 0 12px 12px; margin: 0; }
+.office-dock .room-controls h2 { font-size: 14px; }
+.office-dock .blueprint-crew { padding: 10px; display: grid; grid-template-columns: repeat(auto-fill,minmax(180px,1fr)); }
+.office-dock .blueprint-crew button { min-width: 0; padding: 12px; border-radius: 7px; font-size: 12px; }
+.office-dock .blueprint-crew button strong { font-size: 13px; }
+.office-lift-panel { position: absolute; right: 24px; top: 110px; z-index: 5; width: min(310px,85%); padding: 16px; background: var(--surface); border: 1px solid var(--border-strong); border-radius: 12px; box-shadow: 0 18px 60px #0006; }
+.office-lift-panel header { display: flex; align-items: center; justify-content: space-between; }
+.office-lift-panel > button { display: block; width: 100%; margin-top: 8px; text-align: left; padding: 10px; }
+.office-agent-panel { width: min(900px,94vw); height: min(800px,90dvh); max-height: 90dvh; padding: 0; border: 1px solid var(--border-strong); border-radius: 14px; background: var(--surface); color: var(--text); overflow: hidden; }
+.office-agent-panel[open] { display: flex; flex-direction: column; }
+.office-agent-panel::backdrop { background: #081310aa; backdrop-filter: blur(4px); }
+.office-panel-heading { display: flex; gap: 18px; align-items: center; padding: 18px 24px; border-bottom: 1px solid var(--border); }
+.office-panel-heading h2 { margin: 4px 0; font-size: 20px; }
+.office-panel-heading small, .office-panel-heading span { color: var(--text-muted); font-size: 12px; }
+.office-panel-heading > button { margin-left: auto; }
+.office-panel-tabs { display: flex; gap: 6px; padding: 10px 18px; border-bottom: 1px solid var(--border); overflow-x: auto; flex-shrink: 0; }
+.office-agent-panel button, .office-lift-panel button { padding: 8px 12px; background: var(--surface); border: 1px solid var(--border-strong); color: var(--text); border-radius: 6px; cursor: pointer; }
+.office-panel-tabs button { white-space: nowrap; }
+.office-panel-tabs button[aria-pressed=true] { border-color: #86b9a5; background: #86b9a51c; }
+.office-agent-panel button:disabled { opacity: .5; cursor: default; }
+.office-panel-content { flex: 1; min-height: 0; overflow: auto; padding: 16px; }
+.office-conversation { height: 100%; display: flex; flex-direction: column; }
+.office-conversation .chat-messages-area { flex: 1; min-height: 0; }
+.office-conversation .bubble-content, .office-agent-panel pre { white-space: pre-wrap; overflow-wrap: anywhere; font-family: inherit; line-height: 1.65; }
+.office-conversation .chat-input-bar { flex-shrink: 0; }
+.office-agent-panel textarea { color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px; width: 100%; }
+.office-task-row { padding: 14px 0; border-bottom: 1px solid var(--border); }
+.office-task-row small { display: block; color: var(--text-muted); margin: 6px 0; }
+.office-agent-panel details { padding: 12px 0; border-bottom: 1px solid var(--border); }
+.office-agent-panel > [role=alert] { margin: 8px 16px; }
+@media(max-width:600px) { .blueprint-office { padding: 6px; } .blueprint-office-bar strong { flex-basis:100%; } .blueprint-scene { min-height:360px; height:60vh; } .office-dock > summary span { display:none; } .office-panel-heading { padding:14px; } .office-panel-content { padding:10px; } }
+.blueprint-office-bar { justify-content: flex-start; }
+.office-chat-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding-bottom: 12px; }
+.office-chat-tools small { color: var(--text-muted); font-size: 11px; }
+.blueprint-scene { position: relative; }
+.office-scene-actions { position: absolute; bottom: 8px; left: 8px; right: 8px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; pointer-events: none; }
+.office-scene-actions button { pointer-events: auto; background: #182720ed; color: #e5f3eb; border: 1px solid #759383; border-radius: 6px; padding: 7px 10px; cursor: pointer; font-size: 11px; }
+.office-scene-actions span { font-size: 10px; background: #182720d9; color: #e5f3eb; padding: 6px; border-radius: 4px; }
+.office-new-task { margin-bottom: 16px; }
+.office-new-task summary { cursor:pointer; font-weight:600; }
+.office-new-task form { display:grid; gap:14px; padding:16px 0; }
+.office-new-task label { display:grid; gap:6px; font-size:13px; }
+.office-new-task label:has(input[type=checkbox]) { display:flex; align-items:center; }
+.office-new-task input:not([type=checkbox]), .office-agent-panel select { width:100%; padding:10px; border:1px solid var(--border); border-radius:6px; color:var(--text); background:var(--surface); }
+.office-task-options { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+.office-new-task p { font-size:12px; color:var(--text-muted); margin:0; }
+.office-task-row pre { white-space:pre-wrap; overflow-wrap:anywhere; }
+.office-quality { display:flex; align-items:center; gap:6px; font-size:11px; }
+.office-quality select { background:var(--surface); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:7px; }
+.office-performance { position:absolute; top:8px; left:8px; display:flex; align-items:center; gap:6px; flex-wrap:wrap; max-width:calc(100% - 16px); }
+.office-performance button,.office-performance span { background:#15251ee8; color:#e2efe7; border:1px solid #758f80; border-radius:5px; padding:6px 8px; font-size:10px; }
+.office-performance button { cursor:pointer; }
+@media(pointer:coarse) { .blueprint-office button,.office-agent-panel button,.office-panel-tabs button { min-height:44px; } .blueprint-scene canvas { touch-action:none; } }
+@media(max-width:600px) {
+ .blueprint-office > .chip-row { flex-wrap:nowrap; overflow-x:auto; padding-bottom:10px; }
+ .blueprint-office > .chip-row button { flex-shrink:0; }
+ .office-agent-panel { width:96vw; height:94dvh; max-height:94dvh; }
+ .office-panel-tabs { padding:8px; gap:4px; }
+ .office-task-options { grid-template-columns:1fr; }
+ .office-scene-actions span { display:none; }
+ .office-quality select { min-height:40px; }
+}
+.blueprint-scene:focus-visible { outline: 2px solid #9ed5ba; outline-offset: 3px; }
+.blueprint-office-bar button:disabled,.office-quality select:disabled { opacity:.45; cursor:default; }
+.office-help { padding:0 14px 12px; font-size:12px; line-height:1.65; color:var(--text-muted); }
+.office-qc { border:1px solid var(--border); padding:12px; margin:12px 0; border-radius:8px; }
+.office-qc summary { cursor:pointer; font-weight:600; }
+.office-qc p,.office-qc small { color:var(--text-muted); font-size:12px; }
+.office-qc small { display:block; margin:4px 0 12px; }

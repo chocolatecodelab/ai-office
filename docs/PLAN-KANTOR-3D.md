@@ -27,7 +27,7 @@ tidur karena kuota habis, dan bisa memberi tugas atau menyetujui hasil langsung 
 | Bentuk gedung | **Gedung bertingkat**: lantai dasar bersama + lantai 1–4 per brand, dengan tombol pindah lantai dan tampilan potongan gedung | [KEPUTUSAN] |
 | Area santai | **Bersama di lantai dasar**: lobi, lounge, game room, ruang rapat, pantry; gang & jajanan di luar gedung. Agent idle turun ke lantai dasar | [KEPUTUSAN] |
 | Aset 3D | **Furnitur & interior: model GLB** (Kenney Furniture Kit, CC0) dengan kompresi Draco. **Karakter: tetap avatar Ruang** yang dibuat dari kode | [KEPUTUSAN] (karakter diubah 2 Nov setelah uji K0) |
-| Panel meja | **Tugas + Approval + beri tugas**. Chat langsung dengan agent (runtime lama) dihapus | [KEPUTUSAN], [BP L3-05] |
+| Panel meja | **Chat + Tugas + Approval + Folder + Memori & Rules**. Sesuai permintaan terbaru, chat memakai antrean Hermes per brand; runtime chat lama tidak digunakan | [KEPUTUSAN], [BP L3-05] |
 | Sumber data | API office baru (`/api/office/brands` + WebSocket), bukan `claude-service` lama | PLAN 5.3 |
 | Meja | **Meja tetap per agent** dengan papan nama peran, bukan *hot desking* | [BP]: "jumlah meja dari agents.json" |
 
@@ -174,6 +174,51 @@ aset-sumber/ (tidak di-git, besar)  →  scripts/optimize-models.mjs (gltf-trans
   - arah monitor dan kursi;
   - perabot game room dan gerobak di gang (memakai ulang prop Ruang).
 
+## Hasil implementasi K2 (2 Nov 2026)
+
+- Renovasi langsung di halaman **Office** (`src/pages/Office.tsx`, `Office3D.tsx`), bukan halaman demonstrasi terpisah. Halaman dan menu Lab 3D dihapus. Avatar Ruang serta prop ping-pong, arcade, galon, gerobak bakso, dan kopi sepeda digunakan ulang.
+- Gedung dan 18 meja bersumber dari `/api/office/brands`, hanya untuk agent aktif. Semua brand berlangganan WebSocket masing-masing; pembaruan tidak memindahkan lantai yang sedang dilihat. Saat tersambung ulang, data dimuat ulang; polling 10 detik menjadi cadangan.
+- Ketujuh status server dipetakan ke posisi, pose dasar, warna indikator, label peran/status dan judul tugas. Agent idle berada di lantai dasar; perubahan tujuan mengikuti jalur layout dan lift. Label menunggu kuota menampilkan waktu retry bila tersedia.
+- HUD antrean, approval terbuka, dan menunggu kuota dihitung dari database per brand, tanpa batas jumlah daftar tugas. Lantai awal memprioritaskan approval/error; jika tidak ada, OTCA.
+- Fallback 2D dan pilihan tampilan tetap tersedia; kegagalan scene beralih ke 2D. Klik avatar/kartu menampilkan ringkasan dan pintasan ke Event/Approval. Panel transaksi lengkap tetap K5.
+- Verifikasi: build, test layout/status, pembaruan UI melalui event WebSocket simulasi, dan integrasi Postgres. Office nyata telah dibuka di browser dengan 18 agent serta approval dari database.
+- **Gerbang K2 yang masih perlu diukur:** latensi end-to-end perubahan status server sampai frame 3D ≤ 2 detik. Pengujian UI saat ini memverifikasi refresh ketika event diterima, belum mengukur latensi frame pada perangkat staf.
+- Berikutnya K3: dinding/pintu ruangan, arah furnitur, dekor tiap brand, serta tampilan potongan gedung. Pemolesan pose dan animasi lengkap tetap K4.
+
+## Hasil implementasi K3 (2 Nov 2026)
+
+- Renovasi Office yang sama: ruang meeting **6 kursi di setiap brand**, meja kayu, notebook, layar presentasi, pembatas kaca dengan bukaan pintu, dan lounge tim. Ini ruang visual; penjadwalan atau workflow meeting belum ditambahkan.
+- Tema interior: OTCA executive hitam/emas dan kayu gelap; Info Jerman krem/oak dan grid geometris; Ciao Manda galeri merah/terakota; Jepang Koey kisi shoji dan kayu natural. Aksen resmi tetap berasal dari API/visual.json; finishing arsitektur di `src/office3d/interiors.ts`.
+- Papan peran meja, arah monitor/keyboard/kursi diperbaiki, logo dipasang di depan panel aksen, partisi dan penanda ruang bersama ditambahkan. Model GLB dan prop Ruang digunakan ulang; tidak ada unduhan aset baru.
+- Mode **Lihat gedung** menampilkan lima lantai dengan shell dan logo saja, tanpa furnitur detail/avatar. Klik lantai atau tombol lantai untuk masuk. Kamera overview memperlebar framing dan kembali ke jarak kerja ketika masuk lantai.
+- Optimalisasi: furnitur tetap berbagi geometri/material dari pustaka yang dimuat sekali; hanya lantai aktif dirender penuh; texture papan dibersihkan saat dilepas dan texture logo stabil berdasarkan ID brand.
+- Verifikasi: keempat lantai dan overview diperiksa di browser. Test layout kini mencakup ruang meeting yang tidak memotong jalur meja-ke-lift. Target FPS HP tetap gerbang K6; persetujuan visual dekor oleh Pengguna belum dicatat.
+
+### Penyempurnaan interior atas permintaan Pengguna (2 Nov 2026)
+
+- Setiap brand memiliki ruangan Manager berpintu dekat lift, ruang santai berpartisi, meeting room, panel jendela berbingkai, tanaman, bank loker, lemari, AC, dan detail nat lantai. Tema brand tetap dipertahankan.
+- Lantai dasar ditata ulang menjadi enam ruang: ping-pong, cafeteria/cafe, gym & fitness center (dua treadmill, rak dumbbell, matras), ruang istirahat dengan beanbag, lounge bersofa, dan game room dengan dua arcade. Gang bakso/kopi tetap ada.
+- 18 posisi idle tersebar di keenam ruangan. Lorong tengah dan jalur masuk tetap terbuka; rute melewati bukaan pintu dan menghindari perabot. Label avatar idle muncul saat diarahkan pointer agar penanda ruang terbaca; kartu agent tetap tersedia.
+- Test memeriksa ruang Manager berisi meja/seat Manager, jalur spesialis tidak memasuki ruang Manager, ukuran pintu, dan rute di sekitar meja ping-pong/cafe serta treadmill. Fasilitas tambahan bersifat visual, tanpa workflow reservasi atau simulasi alat olahraga.
+- Referensi gambar Ruang dari Pengguna dipakai sebagai arah suasana, bukan salinan layout. Tekstur parket, ubin, karpet, rumput, paving dan aspal dari `textures.ts` digunakan ulang. Meja/kursi kerja, sofa, meja kopi, pohon, lampu jalan, dan bendera menggunakan prop Ruang; jejak meja pada layout diperbarui mengikuti ukuran WorkDesk asli. Monitor aktif mengikuti status working/revision dari API. Tekstur memakai cache bersama, tanpa unduhan aset baru.
+
+### Aktivitas interaktif ruang bersama (2 Nov 2026)
+
+- Three.js + React Three Fiber yang sudah ada dipakai untuk seluruh animasi; tidak menambah Remotion, physics engine, atau dependensi baru.
+- Keenam ruang memiliki kontrol mulai/jeda dan dua pilihan aktivitas. Klik aset atau papan ruang memberi kontrol yang sama; tombol HTML juga tersedia dalam tampilan 2D. Preferensi reduced motion mematikan gerakan santai pada awal sesi dan tersedia tombol jeda seluruh animasi ruang.
+- Ping-pong: bola dan gestur raket, pilihan tempo, papan rally. Cafe: uap kopi, gestur menyeduh/minum, menu espresso/cappuccino. Gym: belt treadmill, gerak cardio dan papan sesi; dua actor ditempatkan di atas belt ketika sudah tiba. Arcade: pixel bergerak, gestur bermain, neon dan papan skor. Istirahat: gerakan napas dan lingkar panduan. Lounge: gestur berbincang dan layar dengan pilihan suasana.
+- Aktivitas hanya berlaku untuk agent idle yang sudah tiba; status kerja, approval, kuota, error, pause, dan perjalanan tidak diganti. Efek ruang dimuat hanya saat lantai dasar terlihat; pose offscreen dilewati; papan canvas diperbarui maksimal sekali per detik.
+- Ini simulasi visual lokal per sesi browser. Angka rally/skor/seduh merupakan indikator animasi, bukan hasil pertandingan atau data operasional. Kontrol belum disinkronkan antar pengguna, tanpa reservasi fasilitas maupun simulasi fisika penuh.
+- Test: pemetaan enam aktivitas, prioritas status tugas, jeda gerakan, dan kontrol gym di UI tanpa request perubahan server. Klik meja ping-pong dan perubahan/jeda latihan gym juga diverifikasi di browser.
+
+### Koreksi penempatan dan kapasitas (2 Nov 2026)
+
+- `office3d/equipment.ts` menjadi acuan bersama untuk meja ping-pong, posisi pemain, arah hadap, treadmill, ketinggian belt, serta titik duduk lounge. Pemain berada di dua ujung sumbu panjang meja; spectator tidak memakai raket. Pengguna treadmill memakai posisi dunia di atas belt, tanpa offset lokal yang terbalik karena rotasi avatar. Pengguna matras melakukan peregangan.
+- Sofa lounge memiliki dua titik duduk sesuai bantalannya. Agent ketiga mendapat armchair terpisah. Jalur keluar dimulai dengan berdiri di depan tempat duduk, lalu melewati sisi meja kopi.
+- Pose ketujuh status berlaku sama untuk empat brand. Menunggu approval diberi dokumen/pose menunggu, kuota ditandai Zzz, revisi mengetik lebih cepat, error berdiri di samping meja, paused abu-abu. Klik meja juga membuka ringkasan agent. Tombol Reset kamera mengembalikan sudut pandang awal.
+- Area loker ditambah bangku, rak buku, tanaman, sudut kopi, kulkas, dan jam dinding; semuanya di sisi kanan lorong lift.
+- Test regresi memeriksa dua pemain berseberangan dan saling menghadap, kaki di atas belt, kapasitas sofa/armchair, jalur menghindari meja kopi, serta pemetaan status pada keempat brand. Jalur treadmill boleh memasuki alat yang memang menjadi tujuan pengguna tersebut, tanpa memotong alat pengguna lain.
+
 ## 9. Tahapan kerja
 
 Total sekitar **12 hari kerja** (blueprint L3 hanya 6 hari karena memakai fork siap pakai; tambahan waktu untuk GLB dan 4 lantai).
@@ -214,3 +259,62 @@ template TOR/SKB) berjalan paralel karena bergantung pada data dari tim. Tanggal
 | Gaya aset dari beberapa paket tidak serasi | Pilih satu paket utama di K0; paket kedua hanya untuk yang tidak ada |
 | 18 karakter beranimasi membebani GPU | Satu skeleton bersama, animasi di-*throttle* untuk lantai yang tidak dilihat, LOD di tampilan potongan |
 | Lisensi aset tidak jelas | Hanya CC0 atau lisensi yang tercatat di `docs/aset-3d.md`; aset tanpa catatan tidak di-merge |
+
+
+### Penyempurnaan 3 November 2026 — mobilitas dan panel agent
+- Mengembalikan perilaku idle Ruang ke layout baru: jeda aktivitas 12–30 detik setelah tiba, reservasi tempat asal/tujuan selama berjalan, kunjungan ruang bersama, bakso/kopi, serta kembali ke meja brand melalui lift. Aktivitas visual lokal tidak mengubah status tugas server.
+- Lift memiliki pintu geser yang merespons agent di dekatnya, jeda naik/turun, serta panel pilihan lantai dari klik lift/tombol toolbar. Ini visualisasi perpindahan, belum simulasi satu kabin dengan antrean penumpang lintas lantai.
+- Gerobak bakso/kopi bisa diklik untuk mengajak agent idle yang sudah tiba di tempatnya. Slot pedagang tidak direbut saat dipakai. Avatar menghadap pedagang dan memiliki gestur makan/minum. Pintu masuk depan kini benar-benar memiliki celah.
+- Toolbar dipadatkan; aktivitas ruang dan roster berada di bagian yang bisa dilipat. Dialog agent mengikuti pola Ruang: Chat, Tugas, Approval, Folder, Memori & Rules. Kamera reset menyesuaikan lebar viewport agar area luar ikut terlihat.
+- Chat tersimpan sebagai tugas konten.chat pada Postgres dan antrean Hermes; sepuluh hasil chat sebelumnya dari agent/brand yang sama menjadi konteks. Respons diperbarui lewat WebSocket/polling (belum streaming token). Kuota, retry, audit dan approval tetap memakai pipeline Office. Tidak mengirim pesan lewat runtime Claude lama.
+- Panel mendukung kirim pesan, status respons, coba ulang kegagalan, ekspor JSON, tempel riwayat sebagai konteks pengguna, review/revisi, membaca versi hasil tugas serta konteks resmi brand. Folder di sini berisi aset tugas; belum editor filesystem. Memori resmi bersifat baca-saja, bukan editor aturan atau penghapusan riwayat.
+- Pengujian baru: reservasi selama perjalanan, kunjungan luar/brand, jeda dan kembali kerja; pemisahan konteks chat antar agent; pengiriman chat ke brand terpilih dan pencegahan kirim saat respons masih antre. Validasi browser tidak mengirim tugas produksi atau mengeksekusi keputusan approval.
+
+### Tahap berikutnya — tugas dari meja agent
+- Tab Tugas memiliki form brief, jenis hasil sesuai peran, prioritas, analisis mendalam, dan opsi mendesak yang menjelaskan penggunaan pool Claude berbayar.
+- Hasil tugas dapat dibaca lengkap; tugas gagal dapat dicoba ulang, dan tugas antre/menunggu kuota/dijeda/gagal dapat dibatalkan lewat API brand yang sama.
+- Tab Folder dapat mengunduh setiap versi hasil sebagai Markdown.
+- Prioritas tugas sekarang diteruskan ke BullMQ dan dipertahankan saat retry.
+- Form diperiksa di browser tanpa membuat tugas produksi; pengujian panel/chat terkait dan build digunakan untuk validasi.
+
+### K4 — antrean lift dan transisi pose
+- Lift memiliki reservasi satu penumpang dari masuk sampai keluar di lantai tujuan, dengan urutan FIFO. Agent yang menunggu ditempatkan berjarak di koridor lift; reservasi dibersihkan saat agent dilepas dari scene.
+- Perjalanan yang sudah berada di lift tetap diselesaikan ketika aktivitas idle dijeda, agar penumpang tidak mengunci lift.
+- Arah hadap serta pose kaki, tangan, dan badan diinterpolasi saat berubah dari berjalan ke aktivitas/status tujuan. Jeda boarding tetap memperbarui visibilitas dan pose.
+- Validasi: 40 tes layout/aktivitas/roaming/lift lulus; lint dan build berhasil. Gerbang K4 belum ditutup: pengecekan visual ketujuh status dan pengujian perjalanan ramai di browser masih diperlukan. Antrean ini belum merupakan simulasi kabin fisik dengan pemanggilan antar lantai, dan belum menangani semua perpotongan agent di koridor lain.
+
+### Koreksi cafe, pingpong, pedagang, dan kapasitas lift
+- Cafe memakai dua meja dan empat kursi; anchor posisi/facing kursi serta agent memakai definisi bersama. Jalur keluar menyamping menghindari kedua meja.
+- Bola diam di atas meja ketika kedua pemain belum tiba atau aktivitas dijeda. Spectator tidak mengaktifkan rally. Gestur pemain juga menunggu pasangan.
+- Dua NPC pedagang dengan apron dan gestur melayani ditempatkan pada bakso dan kopi; bukan agent pekerjaan dan tidak masuk hitungan kru.
+- Lift mengelompokkan maksimal lima penumpang dengan lantai asal/tujuan sama dalam jendela boarding empat detik. Penumpang keenam menunggu sampai kelompok selesai; tiap penumpang memiliki posisi visual tersendiri. Interior ditambah plafon menyala, panel lantai, dinding metal, dan handrail.
+- Uji layout/aktivitas/lift lulus (40 tes), ditambah regresi empat kursi cafe. Build, lint, dan pemeriksaan browser berhasil. Simulasi kabin fisik/multi-stop tetap belum tersedia.
+
+### K4 — jalur berpapasan dan verifikasi status
+- Jalur utama menggunakan sisi berbeda untuk arah berlawanan (jarak 0,64 m di lantai dasar); pengujian jalur memastikan furnitur dan pintu tetap terhindar. Ini belum solver tabrakan umum pada setiap persimpangan.
+- Tujuan trip lift dibaca dari segmen vertikal aktual, sehingga pergantian tujuan saat sedang berjalan tidak salah memesan lantai. Gerakan ke slot antre memakai jarak sebelum normalisasi dan animasi berjalan.
+- Tombol Panduan status di Office memperlihatkan tujuh contoh dengan komponen Agent yang sama seperti runtime. Contoh diberi penanda visual dan tidak mengubah API/server. Ketujuh pose diperiksa di browser dan bukti disimpan.
+- Pemeriksaan: 42 tes terkait lulus, ditambah regresi jalur berlawanan; lint, TypeScript, dan build berhasil. Gerbang visual tujuh status sudah diperiksa; pengukuran performa perangkat tetap K6 dan uji keramaian dengan staf tetap K7.
+
+### K5 — panel meja dan alur review
+- Panel Office dan halaman Approval memakai komponen ApprovalCard yang sama. Tiap approval menyimpan catatannya sendiri, memperlihatkan approver/jenis pekerjaan, menolak revisi tanpa catatan, dan menonaktifkan keputusan bila hasil belum tersedia.
+- Kunci sinkron mencegah klik ganda mengirim keputusan/transaksi berulang. Kesalahan ditampilkan dan keputusan dapat dicoba lagi; refresh dilakukan setelah sukses.
+- Respons lama pada perpindahan brand atau pemilihan aset tidak menimpa pilihan terbaru. Dialog agent memiliki nama aksesibel.
+- Uji UI mencakup kirim tugas pada brand terpilih, brief tetap utuh ketika gagal, reset form setelah sukses, setujui sekali, revisi dengan catatan khusus hasil, serta kegagalan keputusan tanpa sukses palsu. Uji store/runner Postgres mencakup hasil, penolakan, revisi, dan persetujuan.
+- Validasi: 177 tes lulus, 1 dilewati; lint dan build diperiksa. Panel hasil Event Specialist diperiksa di browser tanpa menjalankan keputusan produksi. Alur K5 terverifikasi melalui UI dengan API tiruan dan integrasi database office_test; uji langsung pengguna dengan provider nyata tetap bagian pilot.
+
+### K6 — kualitas adaptif dan layout mobile
+- Pengaturan Grafis Otomatis/Hemat/Detail. Hemat memakai DPR 1 dan tanpa shadow map; Otomatis memilih Hemat pada pointer sentuh/perangkat <=4 core, atau saat rata-rata frame di bawah 23 FPS setelah warm-up. Detail tetap bisa dipilih manual.
+- Frameloop berhenti ketika dokumen tersembunyi dan kembali berjalan ketika terlihat. Kamera menggunakan interpolasi berbasis delta dan menyesuaikan framing ketika viewport berubah. Buffer pose dan vektor gerakan dipakai ulang untuk mengurangi alokasi per frame.
+- Monitor Performa opsional menampilkan estimasi FPS browser, draw calls dan segitiga, diperbarui dua detik sekali. Ini bukan hasil benchmark HP.
+- Layout 390x844 diperiksa di browser: tab lantai dapat digeser horizontal, kontrol sentuh memiliki target lebih besar, panel agent menggunakan tinggi dinamis dan form tugas satu kolom pada layar kecil.
+- scripts/check-office-budget.mjs mengaudit seluruh chunk dist/assets, model, logo dan decoder Draco sebagai batas konservatif berkas mentah 8 MiB. Hasil awal sekitar 4,25 MB; bukan rekaman transfer jaringan.
+- 44 tes terkait lulus, termasuk pilihan kualitas manual/otomatis. Build dan lint diperiksa. K6 belum ditutup: target >=30 FPS dan unduhan jaringan awal masih harus diukur pada HP kelas menengah yang dipakai staf; instancing/LOD lebih lanjut mengikuti hasil profiling itu.
+
+### K6 lanjutan dan K7 — hasil pengembang
+- Tujuh bagian tubuh/wajah kaku avatar digabung menjadi satu geometry vertex-color; empat anggota gerak tetap terpisah. Penghematan enam draw per avatar pada pass utama secara struktur mesh, bukan klaim perbandingan FPS antarperangkat.
+- Loader furnitur membuang decoder lewat finally dan menghapus cache promise yang gagal, sehingga percobaan 3D berikutnya bisa memuat ulang aset.
+- Area 3D dapat difokuskan dengan Tab, pan memakai panah, dan pindah lantai memakai Page Up/Down. Posisi pan dipertahankan saat kamera bergeser vertikal. Browser memverifikasi Page Down dari OTCA ke G dan pan horizontal.
+- K7: bantuan Cara menggunakan kantor tersedia di halaman; Escape menutup lift; memilih lantai keluar dari panduan status; kontrol grafis/kamera/panduan nonaktif pada 2D. Regresi fallback 2D diperbarui untuk menegaskan kontrol yang tepat.
+- Suite lengkap: 178 lulus, 1 dilewati. Lint/build dan audit budget lulus (4.261.820 byte mentah untuk scope skrip). Pengamatan desktop di lantai G mode Detail: sekitar 56 FPS, 728 draw calls, 144.090 segitiga pada satu sampel; angka berubah dengan scene dan bukan benchmark HP.
+- Prosedur uji penerimaan ada di docs/UJI-KANTOR.md. Implementasi dan pemeriksaan pengembang K6/K7 sudah maju; gerbang HP nyata dan tiga staf belum lulus karena belum dijalankan. Jangan menandai keseluruhan kantor selesai sebelum hasil tersebut tercatat.

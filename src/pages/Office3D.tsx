@@ -1,340 +1,308 @@
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
-import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState, type MutableRefObject } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
-import { officeStateBadge } from '../office-state.ts'
+import { nextVisits, type Visit } from '../office3d/roaming.ts'
+import { renderQuality, type OfficeQuality } from '../office3d/quality.ts'
+import { LiftQueue } from '../office3d/lift-queue.ts'
+import { Lift } from '../scene3d/lift.tsx'
 import { agentLook } from '../agents.ts'
-import { clampTarget, createLayout, FLOOR_HEIGHT, floorOf, GAME_ROOM, idlePlan, placementFor, walkPath3, type Floor, type OfficeLayout, type Placement, type Vec3 } from '../office3d-layout.ts'
-import { AvatarBody } from '../scene3d/character.tsx'
-import { Environment } from '../scene3d/environment.tsx'
-import { WorkDesk } from '../scene3d/props.tsx'
-import type { OfficeStation } from '../types.ts'
+import { AGENT_NAMES, AGENT_STATUS_LABELS, type AgentStatus, type OfficeAgent, type OfficeBrand } from '../office-api.ts'
+import { agentSpot, liveBuilding, STATUS_COLORS } from '../office3d/live.ts'
+import { FLOOR_HEIGHT, LIFT, LIFT_LANE_X, floorAt, route, type BuildingLayout, type Spot } from '../office3d/building.ts'
+import { AvatarBody, type AvatarParts } from '../scene3d/character.tsx'
+import { defaultRoomControls, idleActivity, roomForSpot, type ActivityRoom, type RoomControls } from '../office3d/activities.ts'
+import { RoomEffects } from '../scene3d/room-effects.tsx'
+import { BuildingScene } from '../scene3d/building.tsx'
+import { OfficeChair, WorkDesk } from '../scene3d/props.tsx'
+import { useFurniture } from '../scene3d/furniture.ts'
 
-// 3D view of the same Office snapshot the 2D view renders. Positions come from each station's
-// room, roomPosition and seat, so the 3D office shows exactly the states the server derived.
-
-type Registry<T> = MutableRefObject<Map<string, T>>
-
-/** Ground-floor spots outside the building (gang, sidewalk, yard) stay in view from lantai 2. */
-function outdoors(x: number, z: number, layout: OfficeLayout): boolean {
-  const { minX, maxX, maxZ } = layout.building
-  const inGameRoom = x > GAME_ROOM.minX && x < GAME_ROOM.maxX && z > GAME_ROOM.minZ && z < GAME_ROOM.maxZ
-  return x < minX || z > maxZ || (x > maxX && !inGameRoom)
+function Camera({ floor, overview, reset }: { floor: number; overview: boolean; reset: number }) {
+  const { camera, gl, size } = useThree()
+  const controls = useMemo(() => new OrbitControls(camera, gl.domElement), [camera, gl])
+  useEffect(() => () => controls.dispose(), [controls])
+  useEffect(() => {
+    controls.maxPolarAngle = Math.PI / 2.15
+    controls.minDistance = 6
+    controls.maxDistance = 80
+    controls.target.set(-1, floor * FLOOR_HEIGHT + 0.8, 0)
+    const aspect = gl.domElement.clientWidth / Math.max(1,gl.domElement.clientHeight)
+    const distance = Math.max(22, Math.min(70, 17 / (Math.tan(21*Math.PI/180)*aspect)))
+    camera.position.copy(controls.target).add(new THREE.Vector3(0,14,17).setLength(distance))
+    // Initial camera position only; floor changes glide below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [camera, controls, reset, size.width, size.height, overview])
+  useEffect(()=>{
+    const element=gl.domElement.closest('.blueprint-scene')
+    const key=(event:Event)=>{
+      const e=event as KeyboardEvent
+      if(e.target instanceof HTMLElement && e.target.matches('button,input,select,textarea,a')) return
+      const directions:Record<string,[number,number,number]>={ArrowLeft:[-0.7,0,0],ArrowRight:[0.7,0,0],ArrowUp:[0,0,-0.7],ArrowDown:[0,0,0.7]}
+      const direction=directions[e.key];if(!direction)return
+      e.preventDefault()
+      const x=THREE.MathUtils.clamp(controls.target.x+direction[0],-14,14)-controls.target.x
+      const z=THREE.MathUtils.clamp(controls.target.z+direction[2],-8,8)-controls.target.z
+      controls.target.x+=x;controls.target.z+=z;camera.position.x+=x;camera.position.z+=z
+    }
+    element?.addEventListener('keydown',key)
+    return()=>element?.removeEventListener('keydown',key)
+  },[camera,controls,gl])
+  const scratch = useMemo(()=>new THREE.Vector3(),[])
+  useFrame((_,delta) => {
+    const goal = scratch.set(controls.target.x, overview ? FLOOR_HEIGHT * 2 : floor * FLOOR_HEIGHT + 0.8, controls.target.z)
+    const step = goal.sub(controls.target).multiplyScalar(1-Math.exp(-5*Math.min(delta,0.1)))
+    controls.target.add(step)
+    camera.position.add(step)
+    if (overview && camera.position.distanceTo(controls.target) < 43) camera.position.add(scratch.copy(camera.position).sub(controls.target).normalize().multiplyScalar(24*Math.min(delta,0.1)))
+    controls.update()
+  })
+  return null
 }
 
-function Character({ station, placement, layout, floor, onSelect, anchor }: { station: OfficeStation; placement: Placement; layout: OfficeLayout; floor: Floor; onSelect: (station: OfficeStation, trigger: HTMLElement | null) => void; anchor: (object: THREE.Object3D | null) => void }) {
+function Agent({ id, agent, spot, layout, floor, activities, motion, onArrive, traffic, liftQueue, onSelect }: { id: string; agent: OfficeAgent; spot: Spot; layout: BuildingLayout; floor: number; activities: RoomControls; motion: boolean; onArrive: (id: string, key: string) => void; traffic: Map<string, THREE.Vector3>; liftQueue: LiftQueue; onSelect: (id: string) => void }) {
   const root = useRef<THREE.Group>(null)
-  const body = useRef<THREE.Group>(null)
-  const leftLeg = useRef<THREE.Mesh>(null)
-  const rightLeg = useRef<THREE.Mesh>(null)
-  const leftArm = useRef<THREE.Mesh>(null)
-  const rightArm = useRef<THREE.Mesh>(null)
-  const colors = agentLook(station.id)
-  const offline = station.state === 'Offline'
-  const unknown = station.state === 'Unknown'
-  const tint = (color: string) => offline ? '#7b7f7d' : color
-  const [start] = useState<Vec3>(() => placement?.position || [0, 0, 0])
+  const parts: AvatarParts = { body: useRef(null), leftLeg: useRef(null), rightLeg: useRef(null), leftArm: useRef(null), rightArm: useRef(null) }
+  const limbs=useMemo(()=>[parts.leftLeg,parts.rightLeg,parts.leftArm,parts.rightArm,parts.body],[parts.leftLeg,parts.rightLeg,parts.leftArm,parts.rightArm,parts.body])
+  const [start] = useState(() => spot.position)
+  const [hovered, setHovered] = useState(false)
+  const target = useRef(spot)
   const path = useRef<THREE.Vector3[]>([])
-  const destination = placement?.position ? placement.position.join(',') : '0,0,0'
+  const reported = useRef<string | undefined>(undefined)
+  const lamp = useRef<THREE.Mesh>(null)
+  const poseBuffer=useRef(new Float32Array(20))
+  const directionBuffer=useMemo(()=>new THREE.Vector3(),[])
+  const handProp = useRef<THREE.Group>(null)
+  useEffect(() => () => { traffic.delete(id); liftQueue.release(id) }, [traffic,id,liftQueue])
   useEffect(() => {
-    const group = root.current
-    if (!group || !placement?.position) return
-    path.current = walkPath3([group.position.x, group.position.y, group.position.z], placement.position, layout).map(([px, py, pz]) => new THREE.Vector3(px, py, pz))
-    // placement.position is captured through `destination`.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [destination])
-
-  useFrame((state, delta) => {
+    if (target.current.key === spot.key && target.current.position.join(',') === spot.position.join(',')) return
+    reported.current = undefined
+    // Finish the current route before heading to a new destination, even if status changes mid-lift.
+    path.current.push(...route(layout, target.current, spot).map((point) => new THREE.Vector3(...point)))
+    target.current = spot
+  }, [layout, spot])
+  useFrame((frame, delta) => {
     const group = root.current
     if (!group) return
-    const time = state.clock.elapsedTime
-    const next = path.current[0]
-    let walking = false
-    if (next) {
-      const toNext = next.clone().sub(group.position)
-      const distance = toNext.length()
-      if (distance < 0.04) {
-        path.current.shift()
-      } else {
-        walking = true
-        group.position.add(toNext.clone().normalize().multiplyScalar(Math.min(distance, delta * 2.6)))
-        if (Math.hypot(toNext.x, toNext.z) > 0.01) {
-          const heading = Math.atan2(toNext.x, toNext.z)
-          group.rotation.y += Math.atan2(Math.sin(heading - group.rotation.y), Math.cos(heading - group.rotation.y)) * 0.25
+    const time = frame.clock.elapsedTime
+    let next = path.current[0]
+    // Hold the reservation from boarding until the passenger has exited on the destination floor.
+    if (liftQueue.has(id) && group.position.x <= LIFT_LANE_X+0.02 && next && next.x < LIFT_LANE_X) liftQueue.release(id)
+    let waitingLift = false
+    let walkingToQueue = false
+    if (next && next.x === LIFT.x && group.position.x <= LIFT_LANE_X+0.02 && (motion || agent.status !== 'idle' || liftQueue.has(id))) {
+      if (!liftQueue.request(id,floorAt(group.position.y),floorAt(path.current.find(p => Math.abs(p.y-group.position.y)>0.3)?.y ?? spot.position[1]),time)) {
+        waitingLift = true
+        const slot = new THREE.Vector3(LIFT_LANE_X,group.position.y,LIFT.z+0.48*(liftQueue.rank(id)+1))
+        const offset = slot.sub(group.position)
+        const distance=offset.length()
+        walkingToQueue=distance>0.03
+        if(walkingToQueue) {
+          group.rotation.y=Math.atan2(offset.x,offset.z)
+          group.position.add(offset.normalize().multiplyScalar(Math.min(distance,Math.min(delta,0.1)*1.8)))
         }
+      } else if (Math.abs(group.position.z-LIFT.z)>0.03) {
+        path.current.unshift(new THREE.Vector3(LIFT_LANE_X,group.position.y,LIFT.z))
+        next=path.current[0]
       }
     }
-    // Only the floor in view is drawn; from lantai 2 the agents outside on the ground stay visible.
-    const upstairs = group.position.y > FLOOR_HEIGHT / 2
-    group.visible = floor === 2 ? upstairs || outdoors(group.position.x, group.position.z, layout) : !upstairs
-    if (!walking) group.rotation.y += Math.atan2(Math.sin(placement.facing - group.rotation.y), Math.cos(placement.facing - group.rotation.y)) * 0.12
+    let walking = walkingToQueue
+    if (next && !waitingLift && (motion || agent.status !== 'idle' || liftQueue.has(id))) {
+      const direction = directionBuffer.copy(next).sub(group.position)
+      const distance = direction.length()
+      if (distance < 0.03) { group.position.copy(next); path.current.shift() }
+      else {
+        const vertical = Math.abs(direction.y) > 0.01 && Math.hypot(direction.x,direction.z) < 0.01
+        const boarding = vertical && !liftQueue.canDepart(id,time)
+        walking = !vertical
+        group.position.add(direction.normalize().multiplyScalar(Math.min(distance, Math.min(delta,0.1) * (boarding ? 0 : vertical ? 3.4 : 1.8))))
+        if (walking) group.rotation.y += Math.atan2(Math.sin(Math.atan2(direction.x,direction.z)-group.rotation.y),Math.cos(Math.atan2(direction.x,direction.z)-group.rotation.y)) * (1-Math.exp(-12*delta))
+      }
+    }
+    traffic.set(id, group.position)
+    if (!path.current.length && reported.current !== spot.key) { reported.current = spot.key; onArrive(id,spot.key) }
+    group.visible = floorAt(group.position.y) === floor
+    if (!group.visible) return
+    const arrived = path.current.length === 0
+    const asleep = arrived && agent.status === 'waiting_quota'
+    const typing = arrived && ['working', 'revision'].includes(agent.status)
+    const seated = arrived && spot.seated && agent.status !== 'error'
+    if (arrived) group.rotation.y += Math.atan2(Math.sin(spot.facing-group.rotation.y),Math.cos(spot.facing-group.rotation.y)) * (1-Math.exp(-10*delta))
+    limbs.forEach((ref,i)=>{const obj=ref.current;if(obj){const old=poseBuffer.current,n=i*4;old[n]=obj.rotation.x;old[n+1]=obj.rotation.y;old[n+2]=obj.rotation.z;old[n+3]=obj.position.y}})
     const swing = walking ? Math.sin(time * 10) * 0.6 : 0
-    const arrived = !walking && path.current.length === 0
-    const lying = arrived && placement.pose === 'lie'
-    const onFloor = arrived && placement.pose === 'floor'
-    // In bed (or the hammock) the body lines up with it exactly, not wherever the walk left it.
-    if (lying) group.rotation.y = placement.facing
-    const seated = !walking && (placement.seated || onFloor)
-    if (leftLeg.current && rightLeg.current) {
-      leftLeg.current.rotation.x = lying ? 0 : seated ? -Math.PI / 2.2 : swing
-      rightLeg.current.rotation.x = lying ? 0 : seated ? -Math.PI / 2.2 : -swing
+    const speed = agent.status === 'revision' ? 20 : 14
+    if (parts.leftLeg.current) parts.leftLeg.current.rotation.x = seated ? -Math.PI / 2.2 : swing
+    if (parts.rightLeg.current) parts.rightLeg.current.rotation.x = seated ? -Math.PI / 2.2 : -swing
+    if (parts.leftArm.current) parts.leftArm.current.rotation.x = asleep ? -1.35 : typing ? -1.1 + Math.sin(time * speed) * 0.12 : -swing
+    if (parts.rightArm.current) parts.rightArm.current.rotation.x = asleep ? -1.35 : typing ? -1.1 + Math.cos(time * speed) * 0.12 : arrived && agent.status === 'error' ? -2.4 + Math.sin(time * 3) * 0.15 : swing
+    if (arrived && agent.status === 'waiting_approval') {
+      if (parts.leftArm.current) parts.leftArm.current.rotation.x = -0.7
+      if (parts.rightArm.current) parts.rightArm.current.rotation.x = -0.7+Math.sin(time*1.5)*0.04
     }
-    if (leftArm.current && rightArm.current) {
-      const typing = !walking && (station.state === 'Working' || station.state === 'Reviewing')
-      const talking = !walking && station.state === 'Collaborating'
-      leftArm.current.rotation.x = lying ? 0 : walking ? -swing : typing ? -1.1 + Math.sin(time * 14) * 0.12 : talking ? -0.4 + Math.sin(time * 3) * 0.3 : 0
-      rightArm.current.rotation.x = lying ? 0 : walking ? swing : typing ? -1.1 + Math.cos(time * 14) * 0.12 : 0
+    if (parts.leftArm.current) parts.leftArm.current.rotation.z = 0
+    if (parts.rightArm.current) parts.rightArm.current.rotation.z = 0
+    const outside = arrived && agent.status === 'idle' && motion && ['bakso','kopi'].includes(spot.key)
+    const activity = spot.key === 'pingpong-watch' ? undefined : idleActivity(agent.status, arrived, spot.key, activities)
+    if (handProp.current) { handProp.current.visible = outside || activity === 'cafe' || activity === 'pingpong'; handProp.current.rotation.x = activity === 'pingpong' ? Math.sin(time*(activities.pingpong.mode ? 5 : 2.5))*0.5 : Math.sin(time)*0.2 }
+    const tempo = activity ? (activities[activity].mode ? 5 : 2.5) : 0
+    if (activity && parts.leftArm.current && parts.rightArm.current) {
+      parts.leftArm.current.rotation.x = activity === 'gym' ? Math.sin(time*tempo)*0.65 : activity === 'game' ? -0.9+Math.sin(time*5)*0.12 : activity === 'rest' ? -0.2 : -0.5
+      parts.rightArm.current.rotation.x = activity === 'pingpong' ? -0.8+Math.sin(time*tempo)*0.8 : activity === 'cafe' ? -0.9+Math.sin(time)*0.25 : activity === 'gym' ? -Math.sin(time*tempo)*0.65 : activity === 'game' ? -0.9+Math.cos(time*5)*0.12 : activity === 'lounge' ? -0.5+Math.sin(time*2)*0.2 : -0.2
+      if (activity === 'gym' && spot.key === 'gym-3') { parts.leftArm.current.rotation.z = -0.9; parts.rightArm.current.rotation.z = 0.9 }
+      if (activity === 'gym' && spot.key !== 'gym-3' && parts.leftLeg.current && parts.rightLeg.current) { parts.leftLeg.current.rotation.x = Math.sin(time*tempo)*0.6; parts.rightLeg.current.rotation.x = -Math.sin(time*tempo)*0.6 }
     }
-    if (body.current) {
-      // Lying down: the body tips back so the head rests towards the pillow (local -z).
-      body.current.rotation.x += ((lying ? -Math.PI / 2 : 0) - body.current.rotation.x) * 0.2
-      const talk = station.state === 'Collaborating' && !walking ? Math.abs(Math.sin(time * 5)) * 0.03 : 0
-      const breathe = station.state === 'Idle' ? Math.sin(time * (lying ? 1.2 : 2)) * 0.015 : 0
-      body.current.position.y = lying ? (placement.height ?? 0.5) + 0.16 + breathe : (onFloor ? -0.5 : seated ? -0.14 : 0) + talk + breathe
+    if (outside && parts.rightArm.current) parts.rightArm.current.rotation.x = -1 + Math.sin(time*1.5)*0.35
+    if (parts.body.current) {
+      parts.body.current.rotation.x = asleep ? 0.45 + Math.sin(time) * 0.02 : activity === 'rest' ? 0.08+Math.sin(time)*0.02 : activity === 'gym' ? 0.12 : 0
+      const cabin = liftQueue.has(id) && group.position.x>7.8
+      const slots=[[-0.5,-0.45],[0.5,-0.45],[-0.5,0.45],[0.5,0.45],[0,0]]
+      const offset=slots[liftQueue.slot(id)]
+      parts.body.current.position.x = cabin ? offset[0] : 0
+      parts.body.current.position.z = cabin ? offset[1] : 0
+      parts.body.current.position.y = activity === 'gym' && spot.key !== 'gym-3' ? Math.abs(Math.sin(time*tempo))*0.06 : seated ? -0.14 : 0
     }
+    const blend=1-Math.exp(-14*Math.min(delta,0.1))
+    limbs.forEach((ref,i)=>{const obj=ref.current;if(!obj)return;const old=poseBuffer.current,n=i*4
+      obj.rotation.set(THREE.MathUtils.lerp(old[n],obj.rotation.x,blend),THREE.MathUtils.lerp(old[n+1],obj.rotation.y,blend),THREE.MathUtils.lerp(old[n+2],obj.rotation.z,blend))
+      obj.position.y=THREE.MathUtils.lerp(old[n+3],obj.position.y,blend)
+    })
+    if (lamp.current) lamp.current.scale.setScalar(agent.status === 'waiting_approval' ? 1 + Math.sin(time * 4) * 0.2 : 1)
   })
-
   return <group ref={root} position={start}>
-    <AvatarBody parts={{ body, leftLeg, rightLeg, leftArm, rightArm }} colors={colors} tint={tint}
-      onClick={(event) => { event.stopPropagation(); onSelect(station, null) }} onPointerOver={() => { document.body.style.cursor = 'pointer' }} onPointerOut={() => { document.body.style.cursor = '' }}>
-      {unknown && <mesh position={[0, 0.03, 0]} rotation={[-Math.PI / 2, 0, 0]}><ringGeometry args={[0.45, 0.55, 24]}/><meshBasicMaterial color="#e9c47b" transparent opacity={0.85}/></mesh>}
-      <object3D ref={anchor} position={[0, 2.05, 0]}/>
-    </AvatarBody>
+    <AvatarBody parts={parts} colors={agentLook(id)} tint={(color) => agent.status === 'paused' ? '#8b8b8b' : color} onPointerOver={() => setHovered(true)} onPointerOut={() => setHovered(false)} onClick={(event) => { event.stopPropagation(); onSelect(id) }}/>
+    {agent.status === 'waiting_approval' && <group position={[0,0.97,0.35]}>
+      <mesh><boxGeometry args={[0.28,0.34,0.015]}/><meshStandardMaterial color="#fff6db"/></mesh>
+      {[0.08,0,-0.08].map((offset) => <mesh key={offset} position={[0,offset,0.01]}><boxGeometry args={[0.19,0.015,0.01]}/><meshBasicMaterial color="#be9847"/></mesh>)}
+    </group>}
+    <group ref={handProp} position={[0.4,1.1,0.35]} visible={false}>
+      {roomForSpot(spot.key) === 'pingpong' ? <mesh scale={[1,0.15,1]}><sphereGeometry args={[0.15,12,8]}/><meshStandardMaterial color="#ca464c"/></mesh> : <mesh><cylinderGeometry args={[0.07,0.055,0.14,12]}/><meshStandardMaterial color="#f4ead6"/></mesh>}
+    </group>
+    <mesh ref={lamp} position={[0, 2, 0]} onClick={(event) => { event.stopPropagation(); onSelect(id) }}><sphereGeometry args={[0.12, 10, 8]}/><meshBasicMaterial color={STATUS_COLORS[agent.status]}/></mesh>
+    {(agent.status !== 'idle' || hovered || id.startsWith('guide/')) && <AgentLabel agent={agent} label={spot.label}/>}
   </group>
 }
 
-/**
- * Screen-space labels: each frame, project every anchor into the canvas and move its DOM label
- * there directly (no React re-render). Labels live outside the Canvas, so they unmount cleanly
- * and use the page's own styles and focus handling.
- */
-function LabelProjector({ anchors, labels }: { anchors: Registry<THREE.Object3D>; labels: Registry<HTMLElement> }) {
-  const point = useMemo(() => new THREE.Vector3(), [])
-  useFrame(({ camera, size }) => {
-    const projected: { element: HTMLElement; x: number; y: number; depth: number }[] = []
-    for (const [key, object] of anchors.current) {
-      const element = labels.current.get(key)
-      if (!element) continue
-      let shown = true
-      for (let node: THREE.Object3D | null = object; node; node = node.parent) if (!node.visible) { shown = false; break }
-      object.getWorldPosition(point).project(camera)
-      const visible = shown && point.z < 1 && Math.abs(point.x) <= 1.1 && Math.abs(point.y) <= 1.1
-      element.style.visibility = visible ? 'visible' : 'hidden'
-      if (visible) projected.push({ element, x: ((point.x + 1) / 2) * size.width, y: ((1 - point.y) / 2) * size.height, depth: point.z })
+function AgentLabel({ agent, label }: { agent: OfficeAgent; label: string }) {
+  const texture = useMemo(() => {
+    const canvas = document.createElement('canvas')
+    canvas.width = 512; canvas.height = 112
+    const ctx = canvas.getContext('2d')!
+    ctx.fillStyle = '#18221ee8'; ctx.fillRect(0, 0, 512, 112)
+    ctx.textAlign = 'center'; ctx.font = 'bold 23px sans-serif'; ctx.fillStyle = '#ffffff'
+    ctx.fillText(AGENT_NAMES[agent.agentType] ?? agent.agentType, 256, 28, 500)
+    ctx.fillStyle = STATUS_COLORS[agent.status]; ctx.font = '21px sans-serif'
+    const marker = { idle:'●', working:'▶', revision:'✎', waiting_quota:'Zzz', waiting_approval:'▤', error:'!', paused:'Ⅱ' }[agent.status]
+    ctx.fillText(`${marker} ${AGENT_STATUS_LABELS[agent.status]}`, 256, 58)
+    ctx.fillStyle = '#ffffff'; ctx.font = '18px sans-serif'
+    const detail = agent.status === 'waiting_quota' && agent.retryAt ? `Coba lagi ${new Date(agent.retryAt).toLocaleTimeString('id-ID')}` : agent.currentTask ?? label
+    ctx.fillText(detail.length > 45 ? `${detail.slice(0, 42)}…` : detail, 256, 91, 500)
+    const map = new THREE.CanvasTexture(canvas)
+    map.colorSpace = THREE.SRGBColorSpace
+    return map
+  }, [agent.agentType, agent.status, agent.currentTask, agent.retryAt, label])
+  useEffect(() => () => texture.dispose(), [texture])
+  return <sprite position={[0, 2.55, 0]} scale={[2.5, 0.55, 1]}><spriteMaterial map={texture} transparent depthWrite={false}/></sprite>
+}
+
+export default function Office3D({ brands, floor, night, quality = 'auto', cameraReset = 0, guide = false, motion = true, onLift, overview = false, activities = defaultRoomControls(), onRoomInteract, onFloorSelect, onSelect }: { brands: OfficeBrand[]; floor: number; night: boolean; quality?: OfficeQuality; cameraReset?: number; guide?: boolean; motion?: boolean; onLift?: () => void; overview?: boolean; activities?: RoomControls; onRoomInteract?: (room: ActivityRoom) => void; onFloorSelect?: (floor: number) => void; onSelect: (id: string) => void }) {
+  const { library, error } = useFurniture()
+  const [visible,setVisible]=useState(()=>!document.hidden)
+  const [slow,setSlow]=useState(false)
+  const [stats,setStats]=useState('')
+  const [monitor,setMonitor]=useState(false)
+  const constrained=Boolean(window.matchMedia?.('(pointer: coarse)').matches) || (navigator.hardwareConcurrency>0 && navigator.hardwareConcurrency<=4)
+  const rendering=renderQuality(quality,constrained,slow)
+  useEffect(()=>{const changed=()=>setVisible(!document.hidden);document.addEventListener('visibilitychange',changed);return()=>document.removeEventListener('visibilitychange',changed)},[])
+  const layout = useMemo(() => liveBuilding(brands), [brands])
+  const visits = useRef(new Map<string, Visit>())
+  const traffic = useRef(new Map<string, THREE.Vector3>())
+  const liftQueue = useRef(new LiftQueue())
+  const elapsed = useRef(0)
+  const [, redraw] = useState(0)
+  const [notice,setNotice] = useState('')
+  const visitVendor = (key: 'bakso' | 'kopi') => {
+    if (!motion) { setNotice('Aktifkan aktivitas terlebih dahulu.'); return }
+    const spot = layout.idleSpots.find(s => s.key===key)!
+    if ([...visits.current.values()].some(v => v.spot.key===key || v.from?.key===key)) { setNotice('Tempat sedang dipakai; agent lain akan berkunjung bergantian.'); return }
+    const candidate = brands.flatMap(b => b.agents.filter(a => a.active && a.status==='idle').map(a => ({id:b.id+'/'+a.agentType,agent:a}))).find(a => {const v=visits.current.get(a.id);return v && !v.from})
+    if (!candidate) { setNotice('Belum ada agent idle yang siap berangkat.'); return }
+    const previous = visits.current.get(candidate.id)!
+    visits.current.set(candidate.id,{spot,from:previous.spot,visits:previous.visits+1})
+    setNotice((AGENT_NAMES[candidate.agent.agentType] ?? candidate.agent.agentType)+' menuju '+(key==='bakso' ? 'gerobak bakso.' : 'kopi sepeda.'))
+    redraw(n=>n+1)
+  }
+  useEffect(() => {
+    const tick = () => {
+      if (document.hidden) return
+      if (motion) elapsed.current++
+      visits.current = nextVisits(layout,brands,visits.current,elapsed.current,motion)
+      redraw(n => n+1)
     }
-    // Nearest labels keep their spot; a farther label that would overlap one already placed is
-    // lifted above it, so every agent stays readable and clickable.
-    projected.sort((a, b) => a.depth - b.depth)
-    const placed: { left: number; right: number; top: number; bottom: number }[] = []
-    for (const label of projected) {
-      const width = label.element.offsetWidth
-      const height = label.element.offsetHeight
-      const x = Math.min(Math.max(label.x, width / 2 + 4), size.width - width / 2 - 4)
-      let bottom = label.y
-      const left = x - width / 2
-      const right = x + width / 2
-      for (let guard = 0; guard < 6; guard += 1) {
-        const hit = placed.find((box) => left < box.right && right > box.left && bottom - height < box.bottom && bottom > box.top)
-        if (!hit) break
-        bottom = hit.top - 4
-      }
-      placed.push({ left, right, top: bottom - height, bottom })
-      label.element.style.transform = `translate(${x}px, ${Math.max(bottom, height + 4)}px) translate(-50%, -100%)`
-      label.element.style.zIndex = String(Math.round((1 - label.depth) * 10_000))
-    }
-  })
-  return null
+    tick()
+    const timer = setInterval(tick,1000)
+    return () => clearInterval(timer)
+  }, [layout, brands, motion])
+  const arrived = (id: string, key: string) => {
+    const visit = visits.current.get(id)
+    if (visit?.spot.key === key && visit.arrivedAt === undefined) visits.current.set(id,{ ...visit,from: undefined,arrivedAt: elapsed.current })
+  }
+  if (error) throw new Error(error)
+  if (!library) return <p aria-busy="true">Memuat furnitur kantor…</p>
+  const occupied = new Set<ActivityRoom>()
+  for (const visit of visits.current.values()) {
+    const room = !visit.from && roomForSpot(visit.spot.key)
+    if (room) occupied.add(room)
+  }
+  const players=['game-1','game-2'].every(key => [...visits.current.entries()].some(([id,v]) => v.spot.key===key && !v.from && brands.some(b => b.agents.some(a => b.id+'/'+a.agentType===id && a.status==='idle'))))
+  if(!players) occupied.delete('pingpong')
+  const sceneActivities={...activities,pingpong:{...activities.pingpong,enabled:activities.pingpong.enabled && players}}
+  let agentIndex = 0
+  return <div className="blueprint-scene" tabIndex={0} role="region" aria-label="Kantor 3D. Pan dengan tombol panah; Page Up atau Page Down untuk berpindah lantai." onKeyDown={event=>{
+    if(event.target!==event.currentTarget || guide)return
+    if(event.key==='PageUp' || event.key==='PageDown'){event.preventDefault();onFloorSelect?.(Math.max(0,Math.min(layout.floors.length-1,floor+(event.key==='PageUp'?1:-1))))}
+  }}><Canvas frameloop={visible ? 'always' : 'never'} shadows={rendering.shadows} dpr={rendering.dpr} camera={{ fov: 42, near: 0.5, far: 200 }}>
+    <FrameMonitor enabled={visible} onSlow={()=>setSlow(true)} onStats={monitor ? setStats : undefined}/>
+    <color attach="background" args={[night ? '#121b29' : '#c9e2ec']}/>
+    <hemisphereLight args={['#ffffff', '#445044', night ? 0.5 : 1.1]}/>
+    <directionalLight position={[8, 30, 12]} intensity={night ? 0.7 : 1.7} castShadow={rendering.shadows} shadow-mapSize={[1024, 1024]} shadow-camera-left={-14} shadow-camera-right={14} shadow-camera-top={14} shadow-camera-bottom={-14}/>
+    <group visible={!guide}><BuildingScene onVendor={visitVendor} onAgentSelect={onSelect} onRoomInteract={onRoomInteract} brands={brands} night={night} layout={layout} library={library} floor={floor} overview={overview} onFloorSelect={onFloorSelect}/>
+    {!overview && <Lift floor={floor} traffic={traffic.current} onClick={onLift}/> }
+    {!overview && floor === 0 && <RoomEffects controls={activities} occupied={occupied} zones={layout.floors[0].zones} onInteract={onRoomInteract}/>}
+    {brands.flatMap((brand) => brand.agents.filter((agent) => agent.active).map((agent) => {
+      const spot = visits.current.get(`${brand.id}/${agent.agentType}`)?.spot ?? agentSpot(layout, brand.id, agent.agentType, agent.status, agentIndex)
+      agentIndex++
+      return spot ? <Agent key={`${brand.id}/${agent.agentType}`} id={`${brand.id}/${agent.agentType}`} agent={agent} spot={spot} layout={layout} floor={overview ? -1 : floor} activities={sceneActivities} motion={motion} traffic={traffic.current} liftQueue={liftQueue.current} onArrive={arrived} onSelect={onSelect}/> : null
+    }))}
+    </group>{guide && <StatusGuide/>}
+    <Camera floor={guide ? 0 : floor} overview={guide ? false : overview} reset={cameraReset}/>
+  </Canvas><div className="office-performance"><button aria-pressed={monitor} onClick={()=>setMonitor(!monitor)}>Performa · {rendering.low ? 'Hemat' : 'Detail'}</button>{monitor && <span role="status">{stats || 'Mengukur…'} · pengukuran browser</span>}</div>{!overview && floor===0 && <div className="office-scene-actions"><button onClick={() => visitVendor('bakso')}>Beli bakso</button><button onClick={() => visitVendor('kopi')}>Ngopi di luar</button><span role="status">{notice || 'Seret untuk memutar · scroll untuk zoom · klik agent untuk chat'}</span></div>}</div>
 }
 
-export interface ViewHandle { reset: () => void }
-
-/** Orbit (drag), pan (right-drag, two fingers, arrow keys or pan mode) and zoom, kept in bounds. */
-const Controls = forwardRef<ViewHandle, { panMode: boolean; keyTarget: HTMLElement | null; layout: OfficeLayout; elevation: number }>(function Controls({ panMode, keyTarget, layout, elevation }, handle) {
-  const { camera, gl, size } = useThree()
-  const controls = useRef<OrbitControls | null>(null)
-  const { target: cameraTarget, offset: cameraOffset } = layout.camera
-  const target = useMemo(() => new THREE.Vector3(...cameraTarget), [cameraTarget])
-  const frame = useMemo(() => () => {
-    const aspect = size.width / Math.max(size.height, 1)
-    const offset = new THREE.Vector3(...cameraOffset)
-    // Narrow (portrait) views need to back off so the whole building fits across.
-    offset.setLength(offset.length() * Math.max(1, 1.2 / aspect))
-    const focus = target.clone().set(aspect < 1 ? cameraTarget[0] - 1.4 : cameraTarget[0], cameraTarget[1] + elevation, aspect < 1 ? 0.8 : cameraTarget[2])
-    const orbit = controls.current
-    // An undamped update applies and clears any momentum left from an earlier drag,
-    // so it has to happen before the camera is placed, not after.
-    if (orbit) { orbit.enableDamping = false; orbit.update() }
-    camera.position.copy(focus).add(offset)
-    camera.lookAt(focus)
-    if (!orbit) return
-    orbit.target.copy(focus)
-    orbit.update()
-    orbit.enableDamping = true
-  }, [camera, size.width, size.height, target, cameraOffset, cameraTarget, elevation])
-
-  useEffect(() => {
-    const orbit = new OrbitControls(camera, gl.domElement)
-    orbit.enableDamping = true
-    orbit.screenSpacePanning = false // pan across the floor, not up into the sky
-    orbit.minDistance = 5
-    orbit.maxDistance = 48
-    orbit.minPolarAngle = 0.2
-    orbit.maxPolarAngle = 1.32
-    orbit.keyPanSpeed = 25
-    controls.current = orbit
-    frame()
-    return () => { orbit.dispose(); controls.current = null }
-    // frame() only sets the initial view; re-running it on resize is handled below.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [camera, gl])
-  useEffect(() => { frame() }, [frame])
-  useEffect(() => {
-    const orbit = controls.current
-    if (!orbit) return
-    orbit.mouseButtons.LEFT = panMode ? THREE.MOUSE.PAN : THREE.MOUSE.ROTATE
-    orbit.mouseButtons.RIGHT = panMode ? THREE.MOUSE.ROTATE : THREE.MOUSE.PAN
-    orbit.touches.ONE = panMode ? THREE.TOUCH.PAN : THREE.TOUCH.ROTATE
-  }, [panMode])
-  useEffect(() => {
-    const orbit = controls.current
-    if (!orbit || !keyTarget) return
-    orbit.listenToKeyEvents(keyTarget)
-    return () => orbit.stopListenToKeyEvents()
-  }, [keyTarget])
-  useImperativeHandle(handle, () => ({ reset: frame }), [frame])
-
-  useFrame(() => {
-    const orbit = controls.current
-    if (!orbit) return
-    orbit.update()
-    const [x, z] = clampTarget(orbit.target.x, orbit.target.z, layout.pan)
-    if (x !== orbit.target.x || z !== orbit.target.z) {
-      const shift = new THREE.Vector3(x - orbit.target.x, 0, z - orbit.target.z)
-      orbit.target.add(shift)
-      camera.position.add(shift)
-    }
-  })
-  return null
-})
-
-function register<T>(registry: Registry<T>, key: string) {
-  return (value: T | null) => { if (value) registry.current.set(key, value); else registry.current.delete(key) }
+const GUIDE_STATUSES: AgentStatus[]=['idle','working','waiting_quota','waiting_approval','revision','error','paused']
+function StatusGuide() {
+ const layout=useMemo(()=>liveBuilding([]),[])
+ const traffic=useRef(new Map<string,THREE.Vector3>())
+ const lift=useRef(new LiftQueue())
+ return <group><mesh rotation={[-Math.PI/2,0,0]} receiveShadow><planeGeometry args={[24,12]}/><meshStandardMaterial color="#c8d6cc"/></mesh>{GUIDE_STATUSES.map((status,i)=>{
+ const x=(i-3)*2.8
+ const seated=!['idle','error'].includes(status)
+ const spot:Spot={key:'guide-'+status,floor:0,position:[x,0,0],facing:0,seated,label:'Contoh gerakan',exit:[]}
+ const agent:OfficeAgent={brandId:'guide',agentType:'manager',active:true,paused:status==='paused',status,currentTask:'Contoh visual · '+AGENT_STATUS_LABELS[status]}
+ return <group key={status}>{seated && <OfficeChair position={[x,0,0]}/>}{['working','revision','waiting_quota'].includes(status) && <WorkDesk position={[x,0,1.05]} withChair={false} active={status!=='waiting_quota'}/> }<Agent id={'guide/'+status} agent={agent} spot={spot} layout={layout} floor={0} activities={defaultRoomControls()} motion={true} traffic={traffic.current} liftQueue={lift.current} onArrive={()=>{}} onSelect={()=>{}}/></group>
+ })}</group>
 }
 
-/** Current time, refreshed every `interval` ms. */
-function useClock(interval: number) {
-  const [now, setNow] = useState(() => Date.now())
-  useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), interval)
-    return () => window.clearInterval(timer)
-  }, [interval])
-  return now
-}
-
-function useThemeName(): 'dark' | 'light' {
-  const read = () => (document.documentElement.dataset.theme === 'light' ? 'light' : 'dark')
-  const [theme, setTheme] = useState<'dark' | 'light'>(read)
-  useEffect(() => {
-    const observer = new MutationObserver(() => setTheme(read()))
-    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
-    return () => observer.disconnect()
-  }, [])
-  return theme
-}
-
-/** Day in the light theme; evening in the dark theme, when the lamps in the scene switch on. */
-function Lighting({ theme }: { theme: 'dark' | 'light' }) {
-  const day = theme === 'light'
-  return <>
-    <color attach="background" args={[day ? '#bfe0ef' : '#1a2335']}/>
-    <fog attach="fog" args={[day ? '#bfe0ef' : '#1a2335', 38, 75]}/>
-    <hemisphereLight args={[day ? '#fff4e0' : '#7f95bd', day ? '#5d7a4c' : '#1e2620', day ? 1.1 : 0.32]}/>
-    <directionalLight position={[10, 16, 9]} intensity={day ? 2.4 : 0.75} color={day ? '#fff1d6' : '#ff9a5a'} castShadow shadow-mapSize={[2048, 2048]} shadow-bias={-0.0004} shadow-camera-left={-16} shadow-camera-right={16} shadow-camera-top={16} shadow-camera-bottom={-16} shadow-camera-far={60}/>
-    <ambientLight intensity={day ? 0.35 : 0.14} color={day ? '#ffffff' : '#8fa4d8'}/>
-  </>
-}
-
-const FLOORS: { floor: Floor; label: string; title: string }[] = [
-  { floor: 2, label: 'Kamar & Balkon', title: 'Lantai 2: bedroom, lesehan and balcony' },
-  { floor: 1, label: 'Kantor', title: 'Lantai 1: office, lounge, pantry and game room' },
-]
-const FLOOR_KEY = 'mc.officeFloor'
-const SLEEP_KEY = 'mc.officeSleep'
-
-/** An on/off preference kept per browser. */
-function useStoredFlag(key: string): [boolean, (value: boolean) => void] {
-  const [value, setValue] = useState(() => { try { return localStorage.getItem(key) === '1' } catch { return false } })
-  return [value, (next: boolean) => {
-    setValue(next)
-    try { localStorage.setItem(key, next ? '1' : '0') } catch { /* per-browser convenience only */ }
-  }]
-}
-
-function useFloor(): [Floor, (floor: Floor) => void] {
-  const [floor, setFloor] = useState<Floor>(() => {
-    try { return localStorage.getItem(FLOOR_KEY) === '2' ? 2 : 1 } catch { return 1 }
-  })
-  return [floor, (next: Floor) => {
-    setFloor(next)
-    try { localStorage.setItem(FLOOR_KEY, String(next)) } catch { /* per-browser convenience only */ }
-  }]
-}
-
-export default function Office3D({ stations, onSelect }: { stations: OfficeStation[]; onSelect: (station: OfficeStation, trigger: HTMLElement | null) => void }) {
-  const anchors = useRef(new Map<string, THREE.Object3D>())
-  const labels = useRef(new Map<string, HTMLElement>())
-  const view = useRef<ViewHandle>(null)
-  const [panMode, setPanMode] = useState(false)
-  const [keyTarget, setKeyTarget] = useState<HTMLElement | null>(null)
-  const theme = useThemeName()
-  const [floor, setFloor] = useFloor()
-  const [sleepMode, setSleepMode] = useStoredFlag(SLEEP_KEY)
-  const now = useClock(2000)
-  // One unlabeled desk per agent (hot desking); the building is sized for the crew.
-  const layout = useMemo(() => createLayout(stations.length), [stations.length])
-  // Idle agents wander between the lounge, the game room, the pantry, the street food and
-  // lantai 2 (decorative only), spread so no two share a spot. With sleep mode on, every idle
-  // agent goes to bed upstairs instead.
-  const idleSeats = stations.filter((station) => station.state === 'Idle' && station.room === 'Lounge').map((station) => station.seat)
-  const plan = idlePlan(idleSeats, now, layout, sleepMode ? idleSeats : [])
-  const wandering = (station: OfficeStation) => station.state === 'Idle' && station.room === 'Lounge' ? plan.get(station.seat) : undefined
-  // Agents at the meeting table take the next free place around it.
-  const meetingOrder = stations.filter((station) => station.roomPosition === 'meeting-area').map((station) => station.id)
-  const placement = (station: OfficeStation) => wandering(station)?.placement ?? placementFor(station, layout, Math.max(0, meetingOrder.indexOf(station.id)))
-  const floorCount = (value: Floor) => stations.filter((station) => floorOf(placement(station).position) === value).length
-  const occupiedSeats = new Set(stations.filter((station) => station.room === 'Workspace' && station.roomPosition !== 'meeting-area' && station.state !== 'Offline').map((station) => station.seat))
-  return <div className="office-3d" ref={setKeyTarget} tabIndex={0} role="region" aria-label="3D office. Drag to rotate, right-drag or two fingers to pan, scroll to zoom, arrow keys pan when focused. Page Up and Page Down change floors." onKeyDown={(event) => {
-    if (event.key === 'PageUp' || event.key === 'PageDown') { event.preventDefault(); setFloor(event.key === 'PageUp' ? 2 : 1) }
-  }}>
-    <Canvas shadows dpr={[1, 2]} camera={{ position: [-3, 13, 16], fov: 40, near: 0.5, far: 150 }} gl={{ antialias: true }}>
-      <Lighting theme={theme}/>
-      <Environment night={theme === 'dark'} layout={layout} floor={floor}/>
-      {floor === 1 && layout.desks.map((position, index) => <WorkDesk key={index} position={position} active={occupiedSeats.has(index + 1)} withChair/>)}
-      {stations.map((station) => <Character key={station.id} station={station} placement={placement(station)} layout={layout} floor={floor} onSelect={onSelect} anchor={register(anchors, `agent-${station.id}`)}/>)}
-      <LabelProjector anchors={anchors} labels={labels}/>
-      <Controls key={layout.deskCount} ref={view} panMode={panMode} keyTarget={keyTarget} layout={layout} elevation={floor === 2 ? FLOOR_HEIGHT : 0}/>
-    </Canvas>
-    <div className="office-3d-labels">
-      {stations.map((station) => {
-        const badge = officeStateBadge(station.state)
-        const busy = ['Working', 'Reviewing', 'Collaborating'].includes(station.state)
-        const idle = wandering(station)
-        return <button key={station.id} ref={register(labels, `agent-${station.id}`)} type="button" className={`agent-tag-3d state-${station.state.toLowerCase()}`} onClick={(event) => onSelect(station, event.currentTarget)} aria-label={`${station.name}. ${station.state}.${station.activity ? ` ${station.activity}.` : ''}${idle ? ` ${idle.placement.label ?? idle.stop.label}.` : ''} Open station details.`}>
-          {busy && station.activity && <span className="speech speech-3d">{station.activity}</span>}
-          {idle && <span className={`speech speech-3d speech-idle${idle.placement.pose === 'lie' ? ' speech-sleep' : ''}`}>{idle.placement.pose === 'lie' ? '💤 ' : ''}{idle.placement.label ?? idle.stop.label}</span>}
-          <span className="agent-tag-row"><span className="pixel-station-name">{station.privacy === 'locked' ? '🔒 ' : ''}{station.name}</span><span className={`badge ${badge.tone}`}>{station.state === 'Idle' ? 'Idle' : station.state}</span></span>
-        </button>
-      })}
-    </div>
-    <div className="office-3d-floors" role="group" aria-label="Floors">
-      {FLOORS.map((item) => <button key={item.floor} type="button" className={floor === item.floor ? 'active' : ''} aria-pressed={floor === item.floor} onClick={() => setFloor(item.floor)} title={`${item.title} (Page ${item.floor === 2 ? 'Up' : 'Down'})`}>
-        <b>{item.floor}</b><span>{item.label}</span><small>{floorCount(item.floor)}</small>
-      </button>)}
-    </div>
-    <div className="office-3d-tools">
-      <button type="button" className={sleepMode ? 'active sleep' : ''} aria-pressed={sleepMode} onClick={() => { setSleepMode(!sleepMode); if (!sleepMode && idleSeats.length > 0) setFloor(2) }} title="Send every idle agent to bed on lantai 2">💤 Tidur</button>
-      <button type="button" className={panMode ? 'active' : ''} aria-pressed={panMode} onClick={() => setPanMode((value) => !value)} title="Drag moves the view instead of rotating it">✥ Geser</button>
-      <button type="button" onClick={() => view.current?.reset()} title="Back to the starting view">↺ Reset view</button>
-    </div>
-  </div>
+function FrameMonitor({enabled,onSlow,onStats}:{enabled:boolean;onSlow:()=>void;onStats?: (text:string)=>void}) {
+ const frames=useRef(0), elapsed=useRef(0),warmup=useRef(0)
+ useEffect(()=>{frames.current=0;elapsed.current=0;warmup.current=0},[enabled])
+ useFrame(({gl},delta)=>{
+  if(!enabled || delta>0.25)return
+  warmup.current+=delta;if(warmup.current<3)return
+  frames.current++;elapsed.current+=delta
+  if(elapsed.current>=2){const fps=frames.current/elapsed.current
+   if(fps<23)onSlow()
+   onStats?.(Math.round(fps)+' FPS · '+gl.info.render.calls+' draw calls · '+gl.info.render.triangles.toLocaleString('id-ID')+' segitiga')
+   frames.current=0;elapsed.current=0
+  }
+ })
+ return null
 }

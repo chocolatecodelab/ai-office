@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import type { OfficeStation } from '../types.ts'
-import { PixelCharacter } from '../pages/Office.tsx'
+import { PixelCharacter } from '../pages/OfficeDetails.tsx'
 
 interface ChatMessage {
   id: string

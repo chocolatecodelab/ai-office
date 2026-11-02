@@ -23,8 +23,7 @@ let loading: Promise<FurnitureLibrary> | undefined
 export function loadFurniture(url = '/models/furniture.glb'): Promise<FurnitureLibrary> {
   loading ??= (async () => {
     const draco = new DRACOLoader().setDecoderPath('/draco/').setDecoderConfig({ type: 'wasm' })
-    const gltf = await new GLTFLoader().setDRACOLoader(draco).loadAsync(url)
-    draco.dispose()
+    const gltf = await new GLTFLoader().setDRACOLoader(draco).loadAsync(url).finally(()=>draco.dispose())
     const prepared = new Map<string, { object: THREE.Object3D; size: THREE.Vector3 }>()
     const prepare = (name: string) => {
       const cached = prepared.get(name)
@@ -45,8 +44,8 @@ export function loadFurniture(url = '/models/furniture.glb'): Promise<FurnitureL
       prepared.set(name, entry)
       return entry
     }
-    return { piece: (name) => prepare(name).object.clone(true), size: (name) => prepare(name).size.clone() }
-  })()
+    return { piece: (name: string) => prepare(name).object.clone(true), size: (name: string) => prepare(name).size.clone() }
+  })().catch((error:unknown)=>{loading=undefined;throw error})
   return loading
 }
 

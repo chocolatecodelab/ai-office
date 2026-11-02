@@ -1,3 +1,4 @@
+import { equipmentPose } from './equipment.ts'
 // Layout of the OTCA office building (docs/PLAN-KANTOR-3D.md §4), kept apart from the scene so it
 // can be tested. World units are metres, y up, +z towards the street; the camera looks from +z.
 //
@@ -30,8 +31,8 @@ export const CORE = { minX: 6.6, maxX: 10, minZ: -5.5, maxZ: -1.4 }
 export const LIFT = { x: 8.5, z: -3.6, doorX: 7.2 }
 export const LIFT_LANE_X = 6
 
-/** Kenney desk at furniture scale 2: footprint in metres (width along x, depth along z). */
-export const DESK_SIZE = { width: 1.44, depth: 1.12 }
+/** Reused Ruang WorkDesk footprint in metres (width along x, depth along z). */
+export const DESK_SIZE = { width: 1.9, depth: 0.95 }
 /** Seat behind the desk, facing the camera (+z), and the gap beside the desk used to reach it. */
 const SEAT_BEHIND = 1.05
 const DESK_GAP = 1.3
@@ -119,10 +120,15 @@ function brandFloor(index: number, brand: BrandInput): FloorLayout {
   return {
     index, y: y(index), aisleZ: BRAND_AISLE_Z, brand: { id: brand.id, name: brand.name, color: brand.color }, desks,
     sign: at(-3, -5.42),
-    zones: [{ key: 'kerja', label: 'Ruang kerja', minX: -9.8, maxX: 4.6, minZ: -5.4, maxZ: -1.3 }],
+    zones: [
+      { key: 'kerja', label: 'Ruang kerja', minX: -9.8, maxX: 4.6, minZ: -5.4, maxZ: -1.3 },
+      { key: 'manager', label: 'Ruangan Manager', minX: 2.4, maxX: 5.5, minZ: -1.15, maxZ: 1.8, door: { x: 4.9, z: 1.8, width: 1.2 } },
+      { key: 'relax', label: 'Ruang santai', minX: 1, maxX: 5.6, minZ: 3.35, maxZ: 5.3, door: { x: 1.8, z: 3.35, width: 1.2 } },
+      { key: 'meeting', label: `Meeting · ${brand.name}`, minX: -9.6, maxX: -1, minZ: 3.35, maxZ: 5.3, door: { x: -1.8, z: 3.35, width: 1.2 } },
+    ],
     decor: [
-      { piece: 'loungeSofaLong', position: at(-8.6, 4.6), rotation: Math.PI },
-      { piece: 'tableCoffee', position: at(-7.6, 3.9), rotation: 0 },
+      { piece: 'loungeSofaLong', position: at(3.5, 4.9), rotation: Math.PI },
+      { piece: 'tableCoffee', position: at(3.5, 3.9), rotation: 0 },
       { piece: 'pottedPlant', position: at(-9.4, -5), rotation: 0 },
       { piece: 'pottedPlant', position: at(5.6, -5), rotation: 0 },
       { piece: 'bookcaseOpen', position: at(4.6, -5.3), rotation: 0 },
@@ -133,52 +139,39 @@ function brandFloor(index: number, brand: BrandInput): FloorLayout {
 
 /** Ground floor: idle places (lounge, game room, meeting room, pantry) and the gang outside. */
 function groundFloor(): { floor: FloorLayout; idleSpots: Spot[] } {
-  const spot = (key: string, label: string, x: number, z: number, facing: number, seated: boolean, exit: Point[]): Spot =>
-    ({ key, floor: 0, position: [x, 0, z], facing, seated, label, exit })
-  // Rooms behind the aisle have doors on it; the lounge in front is left by its right-hand edge.
-  const viaDoor = (doorX: number, z: number): Point[] => [[doorX, z], [doorX, GROUND_AISLE_Z]]
-  // Outside spots are left along the gang lane, the sidewalk and in through the entrance.
-  const outside = (z: number): Point[] => [[GANG_LANE_X, z], [GANG_LANE_X, SIDEWALK_Z], [ENTRANCE_X, SIDEWALK_Z], [ENTRANCE_X, GROUND_AISLE_Z]]
-  const idleSpots: Spot[] = [
-    spot('lounge-1', 'Santai di lounge', -8.4, 3.9, Math.PI, true, viaDoor(-4.4, 3.9)),
-    spot('lounge-2', 'Santai di lounge', -7.4, 3.9, Math.PI, true, viaDoor(-4.4, 3.9)),
-    spot('lounge-3', 'Nonton TV', -5.6, 2.9, -Math.PI / 2, true, viaDoor(-4.4, 2.9)),
-    spot('game-1', 'Main ping-pong', -8.2, -2.2, Math.PI, false, viaDoor(-5, -2.2)),
-    spot('game-2', 'Main ping-pong', -8.2, -4.6, 0, false, viaDoor(-5, -4.6)),
-    spot('game-3', 'Main arcade', -6.2, -4.7, Math.PI, false, viaDoor(-5, -4.7)),
-    spot('meeting-1', 'Diskusi di ruang rapat', -2.4, -2.4, Math.PI, true, viaDoor(-0.4, -2.4)),
-    spot('meeting-2', 'Diskusi di ruang rapat', -1, -2.4, Math.PI, true, viaDoor(-0.4, -2.4)),
-    spot('pantry-1', 'Bikin kopi', 4.2, -4.6, Math.PI, false, [[4.2, GROUND_AISLE_Z]]),
-    spot('pantry-2', 'Ambil air di galon', 5.4, -4.6, Math.PI, false, [[5.4, GROUND_AISLE_Z]]),
-    spot('bakso', 'Jajan bakso', -12.6, 2.6, Math.PI / 2, false, outside(2.6)),
-    spot('kopi', 'Ngopi di gang', -12.6, -1.2, Math.PI / 2, false, outside(-1.2)),
+  const rooms: Zone[] = [
+    { key: 'pingpong', label: 'Ruang Ping-pong', minX: -9.8, maxX: -4.8, minZ: -5.3, maxZ: -1.2, door: { x: -5.5, z: -1.2, width: 1.2 } },
+    { key: 'cafe', label: 'Cafeteria · Office Cafe', minX: -4.5, maxX: 0.5, minZ: -5.3, maxZ: -1.2, door: { x: -0.2, z: -1.2, width: 1.2 } },
+    { key: 'gym', label: 'Gym & Fitness Center', minX: 0.8, maxX: 5.5, minZ: -5.3, maxZ: -1.2, door: { x: 4.8, z: -1.2, width: 1.2 } },
+    { key: 'lounge', label: 'Lounge', minX: -9.8, maxX: -5, minZ: 1.4, maxZ: 5.3, door: { x: -5.7, z: 1.4, width: 1.2 } },
+    { key: 'rest', label: 'Ruang Istirahat', minX: -4.7, maxX: -0.8, minZ: 1.4, maxZ: 5.3, door: { x: -1.5, z: 1.4, width: 1.2 } },
+    { key: 'game', label: 'Game Room', minX: 1.1, maxX: 5.5, minZ: 1.4, maxZ: 5.3, door: { x: 4.8, z: 1.4, width: 1.2 } },
   ]
-  const at = (x: number, z: number): Vec3 => [x, 0, z]
-  return {
-    idleSpots,
-    floor: {
-      index: 0, y: 0, aisleZ: GROUND_AISLE_Z, desks: [],
-      zones: [
-        { key: 'game', label: 'Game room', minX: -9.8, maxX: -4.6, minZ: -5.4, maxZ: -1.2, door: { x: -5, z: -1.2, width: 1.2 } },
-        { key: 'rapat', label: 'Ruang rapat', minX: -3.8, maxX: 2.6, minZ: -5.4, maxZ: -1.2, door: { x: -0.4, z: -1.2, width: 1.2 } },
-        { key: 'pantry', label: 'Pantry', minX: 3.2, maxX: 6.4, minZ: -5.4, maxZ: -1.6 },
-        { key: 'lounge', label: 'Lounge', minX: -9.8, maxX: -4, minZ: 1.6, maxZ: 5.4, door: { x: -4.4, z: 3.4, width: 3.6 } },
-        { key: 'lobi', label: 'Lobi & resepsionis', minX: -1.6, maxX: 4.6, minZ: 1.6, maxZ: 5.4 },
-      ],
-      decor: [
-        { piece: 'desk', position: at(3, 3.4), rotation: Math.PI }, // reception
-        { piece: 'loungeSofaLong', position: at(-8, 4.5), rotation: Math.PI },
-        { piece: 'televisionModern', position: at(-7.9, 1.6), rotation: 0 },
-        { piece: 'tableCoffee', position: at(-7.2, 3), rotation: 0 },
-        { piece: 'table', position: at(-1.7, -3.4), rotation: 0 }, // meeting room
-        { piece: 'kitchenBar', position: at(4.2, -5.2), rotation: 0 },
-        { piece: 'kitchenCoffeeMachine', position: at(4.2, -5.2), rotation: 0 },
-        { piece: 'kitchenFridge', position: at(5.8, -5.2), rotation: 0 },
-        { piece: 'pottedPlant', position: at(-0.9, 5), rotation: 0 },
-        { piece: 'pottedPlant', position: at(0.9, 5), rotation: 0 },
-      ],
-    },
-  }
+  const spots: Array<[string, string, number, number, boolean]> = [
+    ['game-1','pingpong',-8.2,-2.1,false], ['game-2','pingpong',-8.2,-4.6,false], ['pingpong-watch','pingpong',-7.5,-1.9,false],
+    ['pantry-1','cafe',-3.5,-4.4,false], ['pantry-2','cafe',-1.4,-4.4,false], ['cafe-seat','cafe',-2.8,-2.5,true],
+    ['gym-1','gym',1.7,-2.5,false], ['gym-2','gym',3.1,-2.5,false], ['gym-3','gym',4.4,-2.5,false],
+    ['lounge-1','lounge',-8.7,4.4,true], ['lounge-2','lounge',-7.6,4.4,true], ['lounge-3','lounge',-6.5,4.4,true],
+    ['rest-1','rest',-3.7,4.4,true], ['rest-2','rest',-2.5,4.4,true], ['rest-3','rest',-3.2,2.4,true],
+    ['game-3','game',1.9,4.4,false], ['arcade-2','game',3.2,4.4,false], ['game-seat','game',2.5,2.4,true],
+  ]
+  spots.push(['cafe-seat-2','cafe',-3.4,-1.9,true],['cafe-seat-3','cafe',-1.5,-3.4,true],['cafe-seat-4','cafe',-1.5,-1.9,true])
+  const idleSpots: Spot[] = spots.map(([key, room, x, z, seated]) => {
+    const pose = equipmentPose(key)
+    if (pose) { x = pose.x; z = pose.z }
+    const zone = rooms.find((zone) => zone.key === room)!
+    const door = zone.door!
+    const innerZ = door.z + (zone.minZ === door.z ? 0.35 : -0.35)
+    const bypassX = key.startsWith('cafe-seat') ? x+0.65 : key === 'pantry-2' ? -0.65 : key === 'pantry-1' ? -4.1 : key === 'lounge-1' ? -9.2 : key === 'lounge-2' ? -6.6 : x
+    const approachZ = room === 'lounge' ? 4 : key === 'gym-1' || key === 'gym-2' ? -2.4 : z
+    // Travel through a furniture-free strip inside the door, then the shared central corridor.
+    return { key, floor: 0, position: [x,pose?.y ?? 0,z], facing: pose?.facing ?? (room === 'game' ? 0 : Math.PI), seated, label: zone.label,
+      exit: [[x,approachZ],[bypassX,approachZ],[bypassX,innerZ],[door.x,innerZ],[door.x,door.z],[door.x,GROUND_AISLE_Z]] }
+  })
+  const outside = (key: string, z: number): Spot => ({ key, floor: 0, position: [-12.6,0,z], facing: -Math.PI/2, seated: false, label: key === 'bakso' ? 'Makan bakso' : 'Ngopi di luar',
+    exit: [[GANG_LANE_X,z],[GANG_LANE_X,SIDEWALK_Z],[ENTRANCE_X,SIDEWALK_Z],[ENTRANCE_X,GROUND_AISLE_Z]] })
+  idleSpots.push(outside('bakso',2.6),outside('kopi',-1.2))
+  return { idleSpots, floor: { index: 0, y: 0, aisleZ: GROUND_AISLE_Z, desks: [], zones: rooms, decor: [] } }
 }
 
 export function createBuilding(brands: BrandInput[]): BuildingLayout {
@@ -213,7 +206,18 @@ export function route(layout: BuildingLayout, from: Spot, to: Spot): Vec3[] {
     points.push(...lift(from.floor), ...lift(to.floor).reverse())
   }
   points.push(...[...to.exit].reverse().map(on(to.floor)), to.position)
-  return tidy(from.position, points)
+  // Keep opposite directions on separate sides of the main aisle.
+  const lanes: Vec3[]=[]
+  let previous=from.position
+  for(const point of points) {
+    const floor=floorAt(point[1]), center=aisle(floor)
+    if(Math.abs(previous[1]-point[1])<0.01 && Math.abs(previous[2]-center)<0.01 && Math.abs(point[2]-center)<0.01 && Math.abs(point[0]-previous[0])>0.5) {
+      const offset=(point[0]>previous[0] ? 1 : -1)*(floor===0 ? 0.32 : 0.23)
+      lanes.push([previous[0],point[1],center+offset],[point[0],point[1],center+offset])
+    }
+    lanes.push(point);previous=point
+  }
+  return tidy(from.position, lanes)
 }
 
 /** Drops waypoints that do not move the walker, and middle points of straight runs. */

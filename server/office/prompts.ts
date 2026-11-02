@@ -12,12 +12,14 @@ Cara menyerahkan hasil:
 - Pekerjaan agen lain cukup ditulis sebagai brief singkat untuk agen itu di bagian akhir.`
 
 /** The agent's instructions, built from context/ for its brand. Throws when context/ lacks the agent. */
-export function agentInstructions(contextDir: string, agentType: string, brandId: string, brandName: string): string {
+export function agentInstructions(contextDir: string, agentType: string, brandId: string, brandName: string, conversation = false): string {
   const files = agentContextFiles(contextDir, agentType, brandId)
   if (!files) throw new Error(`Definisi agen ${agentType} tidak ada di context/agents/.`)
   const title = files[0].content.match(/^#\s+(.+)$/m)?.[1]?.trim() ?? agentType
   return `Anda adalah ${title} untuk brand ${brandName}. Tujuan, tanggung jawab, tool, approval, dan KPI Anda ditetapkan di /context/agents/${agentType}.md.
-${OUTPUT_RULES}
+${conversation ? 'Jawab percakapan pengguna dalam bahasa Indonesia sesuai peran dan konteks resmi. Minta klarifikasi bila diperlukan. Jangan mengarang data. Semua hasil merupakan draf untuk review; pesan chat bukan izin publikasi, pengiriman pesan eksternal, atau perubahan budget.' : OUTPUT_RULES}
+
+${agentType==='content-creator' && !conversation ? 'Susun draft dengan bagian: tujuan dan audiens (anonim), angle, headline/subheadline, isi per slide atau caption sesuai brief, CTA, sumber dan data yang belum dikonfirmasi, serta catatan QC. Ikuti visual.json dan checklist-publikasi.md. Jangan menyebut gambar sudah dibuat bila output hanya teks. Jangan memasukkan identitas orang dari chat/SPS; gunakan ringkasan anonim.' : ''}
 
 ${contextPrompt(files)}`
 }

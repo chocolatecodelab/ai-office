@@ -3,7 +3,7 @@ import { formatDateTime, formatNumber } from '../format.ts'
 import { usePolling } from '../polling.ts'
 import type { AgentMemory, MemoryDocument, MemorySnapshot } from '../types.ts'
 import { EmptyState, LoadingState, PageTitle, SourceStatus, Unavailable } from '../ui.tsx'
-import { PixelCharacter } from './Office.tsx'
+import { PixelCharacter } from './OfficeDetails.tsx'
 import { PrivateGate, ProfileUnlock } from '../ProfileLock.tsx'
 
 function DocumentBody({ document, empty }: { document?: MemoryDocument; empty: string }) {

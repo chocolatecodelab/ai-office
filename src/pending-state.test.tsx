@@ -19,7 +19,7 @@ describe('pending application views', () => {
   it('renders loading instead of an empty room or zero crew summary while Office is pending', () => {
     const markup = renderToStaticMarkup(<Office/>)
 
-    expect(markup).toContain('Loading')
+    expect(markup).toContain('Memuat kantor')
     expect(markup).not.toContain('0 active work')
     expect(markup).not.toContain('No declared idle presence')
   })

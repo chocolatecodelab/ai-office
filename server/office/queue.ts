@@ -24,16 +24,19 @@ export class TaskQueue {
   }
 
   /** Schedules a run of the task; one pending job per task and moment, so repeated calls are harmless. */
-  async enqueue(task: Pick<Task, 'brandId' | 'id'>, delayMs = 0): Promise<void> {
+  async enqueue(task: Pick<Task, 'brandId' | 'id'> & Partial<Pick<Task, 'priority'>>, delayMs = 0): Promise<void> {
     const at = Date.now() + delayMs
-    await this.queue.add('run', { brandId: task.brandId, taskId: task.id }, { jobId: `${task.id}-${Math.floor(at / 1000)}`, delay: delayMs })
+    await this.queue.add('run', { brandId: task.brandId, taskId: task.id }, { jobId: `${task.id}-${Math.floor(at / 1000)}`, delay: delayMs, priority: task.priority ?? 2 })
   }
 
   /** Starts processing; `concurrency` bounds parallel runs across brands. */
   start(concurrency = 2): void {
     this.worker = new Worker<JobData>(QUEUE, async (job) => {
       const outcome = await runTask(this.deps, job.data.brandId, job.data.taskId)
-      if (outcome.next === 'retry') await this.enqueue({ brandId: job.data.brandId, id: job.data.taskId }, outcome.delayMs)
+      if (outcome.next === 'retry') {
+        const task = await this.deps.store.task(job.data.brandId, job.data.taskId)
+        if (task) await this.enqueue(task, outcome.delayMs)
+      }
     }, { connection: this.connection, concurrency })
     this.worker.on('failed', (job, error) => console.error(`Tugas ${job?.data.taskId} gagal diproses:`, error.message))
   }

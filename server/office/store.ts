@@ -1,3 +1,5 @@
+import { agentContextFiles, findContextDir } from '../otca-context.js'
+import { screenContent, type ContentQc } from './content-qc.js'
 import type pg from 'pg'
 import { transaction, type Db, type Queryable } from '../db/index.js'
 import { approvalTypeFor, type ApprovalType } from './approval-routes.js'
@@ -100,11 +102,20 @@ export class OfficeStore {
     return (await this.db.query('SELECT id, name, color, paused FROM brands ORDER BY id')).rows
   }
 
+  async summary(brandId: string): Promise<{ queued: number; approvals: number; waitingQuota: number }> {
+    const { rows } = await this.db.query(`SELECT
+      (SELECT count(*)::int FROM tasks WHERE brand_id = $1 AND status = 'queued') AS queued,
+      (SELECT count(*)::int FROM approvals WHERE brand_id = $1 AND decision IS NULL) AS approvals,
+      (SELECT count(*)::int FROM tasks WHERE brand_id = $1 AND status = 'waiting_quota') AS "waitingQuota"`, [brandId])
+    return rows[0]
+  }
+
   async agents(brandId: string): Promise<AgentView[]> {
     const { rows } = await this.db.query(
       `SELECT a.brand_id, a.agent_type, a.active, a.paused OR b.paused AS paused,
               coalesce(array_agg(t.status) FILTER (WHERE t.status IS NOT NULL), '{}') AS statuses,
-              (array_agg(t.title ORDER BY t.updated_at DESC) FILTER (WHERE t.status = 'running'))[1] AS current_task
+              (array_agg(t.title ORDER BY CASE t.status WHEN 'running' THEN 0 WHEN 'revision' THEN 1 WHEN 'waiting_quota' THEN 2 WHEN 'failed' THEN 3 ELSE 4 END, t.updated_at DESC) FILTER (WHERE t.status IN ('running', 'revision', 'waiting_quota', 'waiting_approval', 'failed')))[1] AS current_task,
+              min(t.retry_at) FILTER (WHERE t.status = 'waiting_quota') AS retry_at
          FROM agents a JOIN brands b ON b.id = a.brand_id
          LEFT JOIN tasks t ON t.brand_id = a.brand_id AND t.agent_type = a.agent_type
               AND t.status IN ('running', 'waiting_quota', 'waiting_approval', 'revision', 'failed')
@@ -113,7 +124,7 @@ export class OfficeStore {
         ORDER BY a.agent_type`, [brandId])
     return rows.map((row) => ({
       brandId: row.brand_id, agentType: row.agent_type, active: row.active, paused: row.paused,
-      status: agentStatus(row.statuses, row.paused), currentTask: row.current_task ?? null,
+      status: agentStatus(row.statuses, row.paused), currentTask: row.current_task ?? null, retryAt: iso(row.retry_at),
     }))
   }
 
@@ -201,6 +212,11 @@ export class OfficeStore {
       if (!current) throw new Error(`Tugas ${taskId} tidak ditemukan di brand ${brandId}.`)
       const version = (await tx.query('SELECT coalesce(max(version), 0) + 1 AS next FROM assets WHERE task_id = $1', [taskId])).rows[0].next as number
       await tx.query('INSERT INTO assets (task_id, brand_id, kind, version, content) VALUES ($1, $2, $3, $4, $5)', [taskId, brandId, current.kind, version, output.content])
+      if(current.agentType==='content-creator' && current.kind!=='konten.chat') {
+        const dir=findContextDir()
+        const checklist=dir ? agentContextFiles(dir,current.agentType,brandId)?.find(file=>file.path.endsWith('checklist-publikasi.md'))?.content ?? '' : ''
+        await this.logEvent(tx,current,'content_qc',{version,report:screenContent(output.content,checklist)})
+      }
       await tx.query('INSERT INTO cost_events (task_id, brand_id, source, model, input_tokens, output_tokens) VALUES ($1, $2, $3, $4, $5, $6)',
         [taskId, brandId, output.source, output.model, output.inputTokens, output.outputTokens])
       const task = await this.transition(brandId, taskId, 'waiting_approval', { actor: `agent:${current.agentType}`, reason: `hasil v${version}`, patch: { result: output.content, error: null, run_id: output.runId } }, tx)
@@ -209,6 +225,11 @@ export class OfficeStore {
     })
     this.bus.publish({ type: 'approval', brandId, approvalId: result.approval.id, taskId, decision: null })
     return result
+  }
+
+  async latestContentQc(brandId:string,taskId:string):Promise<ContentQc | undefined> {
+    const {rows}=await this.db.query("SELECT payload FROM task_events WHERE brand_id=$1 AND task_id=$2 AND type='content_qc' ORDER BY id DESC LIMIT 1",[brandId,taskId])
+    return rows[0]?.payload.report as ContentQc | undefined
   }
 
   async approvals(brandId: string, filter: { open?: boolean; taskId?: string } = {}): Promise<Approval[]> {
