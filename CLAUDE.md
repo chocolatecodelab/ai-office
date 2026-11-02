@@ -21,7 +21,9 @@ docker compose -f infra/compose.yml -f infra/compose.local.yml up -d   # postgre
 node scripts/litellm-setup.mjs      # sekali: pool budget + virtual key per brand
 node scripts/hermes-init.mjs otca   # lalu tambah -f infra/compose.hermes.yml untuk hermes-otca
 ```
-Port lokal (hanya 127.0.0.1): postgres 15432, redis 16379, litellm 14000.
+Port lokal (hanya 127.0.0.1): postgres 15432, redis 16379, litellm 14000, hermes-otca 18642
+(`-f infra/compose.hermes.local.yml`). Office API ada di `/api/office` (`server/office/`); test Postgres
+memakai database `office_test` dan dilewati bila Postgres tidak jalan.
 
 ## Aturan kerja
 - **Rahasia** hanya di `.env` dan `infra/env/*.env` (di luar git). Hook `.claude/hooks/block-secrets.mjs` memblokir penulisan key/token.

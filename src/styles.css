@@ -1593,3 +1593,35 @@ aside.office-panel { background: color-mix(in srgb, var(--surface) 96%, transpar
   opacity: .5;
   cursor: not-allowed;
 }
+
+/* Blueprint office pages: Event workflow and Approval box (src/pages/Events.tsx, Approvals.tsx). */
+.office-grid { display: grid; grid-template-columns: minmax(280px, 1fr) 2fr; gap: 20px; align-items: start; }
+.office-grid > section, .office-sidebar { display: grid; gap: 20px; min-width: 0; }
+.office-form { display: grid; gap: 12px; }
+.office-field { display: grid; gap: 6px; font-size: 13px; color: var(--text-muted); }
+.office-field input, .office-field textarea, .question-inputs textarea { max-width: none; width: 100%; }
+.office-field textarea, .question-inputs textarea { background: var(--surface); border: 1px solid var(--border-strong); border-radius: 4px; color: var(--text); font: 13px inherit; padding: 8px 10px; resize: vertical; }
+.office-detail-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.office-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.office-result { background: var(--surface-3); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font-size: 14px; line-height: 1.6; margin: 12px 0; max-height: 520px; overflow: auto; padding: 14px 16px; white-space: pre-wrap; }
+.event-list, .stage-list, .question-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.event-list .chip { font-size: 12px; text-align: left; width: 100%; }
+.event-details { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; margin-top: 12px; }
+.stage-row { border-top: 1px solid var(--border); padding-top: 10px; }
+.stage-head { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; align-items: center; }
+.stage-head strong { font-size: 15px; }
+.stage-error { font-size: 13px; margin: 8px 0 0; }
+.question-row p { margin: 0 0 6px; line-height: 1.5; }
+.question-inputs { display: grid; grid-template-columns: 180px 1fr auto; gap: 8px; align-items: start; }
+.office-status.st-queued, .office-status.st-paused, .office-status.st-cancelled { color: var(--text-muted); background: var(--surface-2); }
+.office-status.st-running { color: var(--active-text); background: var(--active-bg); }
+.office-status.st-waiting_quota { color: var(--c-eab474); background: var(--c-412f1d); }
+.office-status.st-waiting_approval, .office-status.st-revision { color: var(--c-f2c58a); background: var(--c-3d2f1c); }
+.office-status.st-approved, .office-status.st-done { color: var(--c-a9e1be); background: var(--c-203d2d); }
+.office-status.st-failed { color: var(--c-ff9d8f); background: color-mix(in srgb, var(--c-ff9d8f) 16%, transparent); }
+.office-brands { margin-bottom: 20px; }
+.brand-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; border: 1px solid var(--border-strong); vertical-align: -1px; }
+.approval-list { display: grid; gap: 20px; }
+.approval-head { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.approval-head h2 { font-size: 20px; letter-spacing: -.02em; margin: 4px 0 0; }
+@media (max-width: 900px) { .office-grid { grid-template-columns: 1fr; } .question-inputs, .office-detail-fields { grid-template-columns: 1fr; } }

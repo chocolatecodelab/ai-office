@@ -1,0 +1,153 @@
+import { fileURLToPath } from 'node:url'
+import pg from 'pg'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { createDb, migrate, type Db } from '../db/index.js'
+import { mockDrive } from '../integrations/index.js'
+import { officeSettings } from '../settings.js'
+import { readBrands, syncBrands } from './brands.js'
+import { OfficeBus } from './bus.js'
+import { EventWorkflow, parseQuestions } from './event-workflow.js'
+import type { HermesClient, RunRequest, RunResult } from './hermes-client.js'
+import { MAX_ATTEMPTS, routeFor, runTask, type RunnerDeps } from './runner.js'
+import { OfficeStore } from './store.js'
+
+// Runs against a throwaway database: OFFICE_TEST_DATABASE_URL, or office_test on the local Compose
+// Postgres. Skipped when neither is reachable (for example in CI without Postgres).
+
+const contextDir = fileURLToPath(new URL('../../context', import.meta.url))
+const local = officeSettings().databaseUrl?.replace(/\/office$/, '/office_test')
+const testUrl = process.env.OFFICE_TEST_DATABASE_URL || local
+
+async function reachable(url: string | undefined): Promise<boolean> {
+  if (!url) return false
+  const client = new pg.Client({ connectionString: url, connectionTimeoutMillis: 1500 })
+  try { await client.connect(); await client.end(); return true } catch { return false }
+}
+
+const available = await reachable(testUrl)
+
+/** A Hermes stand-in: each run returns the next scripted reply and records what it was asked. */
+function scriptedHermes(replies: Array<Partial<RunResult>>): HermesClient & { requests: RunRequest[] } {
+  const requests: RunRequest[] = []
+  return {
+    requests,
+    async run(_endpoint, request) {
+      requests.push(request)
+      const reply = replies.shift() ?? { status: 'completed', output: 'ok' }
+      return { runId: `run-${requests.length}`, status: 'completed', output: '', model: 'hermes-agent', inputTokens: 10, outputTokens: 5, ...reply }
+    },
+  }
+}
+
+describe.skipIf(!available)('office store, runner and event workflow (Postgres)', () => {
+  let db: Db
+  let store: OfficeStore
+  let events: EventWorkflow
+  const deps = (hermes: HermesClient): RunnerDeps => ({
+    store, hermes, contextDir, endpoint: () => ({ url: 'http://hermes', key: 'k' }), brandName: async () => 'Official OTCA',
+  })
+
+  beforeAll(async () => {
+    db = createDb(testUrl!)
+    await db.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public')
+    await migrate(db)
+    await syncBrands(db, readBrands(contextDir))
+    const bus = new OfficeBus()
+    store = new OfficeStore(db, bus)
+    events = new EventWorkflow(store, bus, mockDrive())
+  })
+  afterAll(async () => { await db?.end() })
+
+  it('loads the four brands and their crews from context/', async () => {
+    expect((await store.brands()).map((brand) => brand.id)).toEqual(['ciaomanda', 'infojerman', 'jepangkoey', 'otca'])
+    expect((await store.agents('otca')).map((agent) => agent.agentType)).toContain('event-specialist')
+    expect((await store.agents('infojerman')).map((agent) => agent.agentType)).not.toContain('event-specialist')
+    await expect(store.createTask('infojerman', { agentType: 'event-specialist', kind: 'event.tema', title: 'x', createdBy: 'uji' })).rejects.toThrow(/tidak aktif/)
+  })
+
+  it('takes a stage through approval, rejection with notes, revision and approval', async () => {
+    const event = await events.create('otca', { title: 'Parents Talk Kuliah di Jerman', details: { tanggal: '14 Desember 2026' }, createdBy: 'uji' })
+    const task = await events.startStage('otca', event.id, 'tema', 'uji')
+    expect(task).toMatchObject({ status: 'queued', agentType: 'event-specialist', kind: 'event.tema', complex: true })
+    expect(task.brief).toContain('14 Desember 2026')
+    await expect(events.startStage('otca', event.id, 'konsep_ads', 'uji')).rejects.toThrow(/menunggu persetujuan/)
+
+    const hermes = scriptedHermes([{ output: '# Tema v1' }, { output: '# Tema v2' }])
+    expect(await runTask(deps(hermes), 'otca', task.id)).toEqual({ next: 'none' })
+    expect(hermes.requests[0].instructions).toContain('/context/agents/event-specialist.md')
+    expect(hermes.requests[0]).toMatchObject({ reasoningEffort: 'high', sessionId: `task-${task.id}` })
+    expect(hermes.requests[0].provider).toBeUndefined() // Codex, the container default
+    const [approval] = await store.approvals('otca', { open: true })
+    expect(approval).toMatchObject({ taskId: task.id, approvalType: 'event' })
+    expect((await store.agents('otca')).find((agent) => agent.agentType === 'event-specialist')?.status).toBe('waiting_approval')
+
+    await expect(store.decide('otca', approval.id, { decision: 'rejected', actor: 'uji' })).rejects.toThrow(/catatan/)
+    await store.decide('otca', approval.id, { decision: 'rejected', note: 'Tambahkan tema beasiswa', actor: 'uji' })
+    expect((await store.task('otca', task.id))?.attempts).toBe(0)
+    await runTask(deps(hermes), 'otca', task.id)
+    expect(hermes.requests[1].input).toContain('Tambahkan tema beasiswa')
+    expect(hermes.requests[1].input).toContain('# Tema v1')
+    expect((await store.assets('otca', task.id)).map((asset) => asset.version)).toEqual([2, 1])
+
+    const [second] = await store.approvals('otca', { open: true })
+    const decided = await store.decide('otca', second.id, { decision: 'approved', actor: 'uji' })
+    expect(decided.task.status).toBe('approved')
+    const detail = await events.detail('otca', event.id)
+    expect(detail?.stages.find((stage) => stage.id === 'konsep_ads')?.ready).toBe(true)
+    expect(detail?.stages.find((stage) => stage.id === 'ppt')).toMatchObject({ ready: false, missing: ['pertanyaan'] })
+  })
+
+  it('turns the approved questions into the speaker answer tracker', async () => {
+    const event = await events.create('otca', { title: 'Seminar Beasiswa', createdBy: 'uji' })
+    const tema = await events.startStage('otca', event.id, 'tema', 'uji')
+    await runTask(deps(scriptedHermes([{ output: 'tema' }])), 'otca', tema.id)
+    await store.decide('otca', (await store.approvals('otca', { open: true, taskId: tema.id }))[0].id, { decision: 'approved', actor: 'uji' })
+    const questions = await events.startStage('otca', event.id, 'pertanyaan', 'uji')
+    const list = Array.from({ length: 10 }, (_, index) => `${index + 1}. Pertanyaan nomor ${index + 1}?`).join('\n')
+    await runTask(deps(scriptedHermes([{ output: `Profil narasumber...\n\n${list}` }])), 'otca', questions.id)
+    const result = await store.decide('otca', (await store.approvals('otca', { open: true, taskId: questions.id }))[0].id, { decision: 'approved', actor: 'uji' })
+    await events.onApproved(result.task)
+    const tracker = await events.questions('otca', event.id)
+    expect(tracker).toHaveLength(10)
+    await expect(events.startStage('otca', event.id, 'ppt', 'uji')).rejects.toThrow(/jawaban narasumber/)
+    await events.answer('otca', event.id, tracker[0].id, { answer: 'Mulai dari bahasa', speaker: 'Frau Priska' })
+    expect((await events.questions('otca', event.id))[0]).toMatchObject({ status: 'dijawab', speaker: 'Frau Priska' })
+    const ppt = await events.startStage('otca', event.id, 'ppt', 'uji')
+    expect(ppt.brief).toContain('Mulai dari bahasa')
+  })
+
+  it('waits for the Codex quota instead of spending the Claude pool, and retries other failures', async () => {
+    const event = await events.create('otca', { title: 'Uji kuota', createdBy: 'uji' })
+    const task = await events.startStage('otca', event.id, 'tema', 'uji')
+    const outcome = await runTask(deps(scriptedHermes([{ status: 'failed', output: 'You have hit your usage limit. Try again in 3 hours.' }])), 'otca', task.id)
+    expect(outcome).toMatchObject({ next: 'retry' })
+    const waiting = await store.task('otca', task.id)
+    expect(waiting).toMatchObject({ status: 'waiting_quota', attempts: 0 })
+    expect(waiting?.retryAt).toBeTruthy()
+
+    const failing = scriptedHermes(Array.from({ length: MAX_ATTEMPTS }, () => ({ status: 'failed' as const, output: 'Provider error 500' })))
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) await runTask(deps(failing), 'otca', task.id)
+    expect(await store.task('otca', task.id)).toMatchObject({ status: 'failed', attempts: MAX_ATTEMPTS })
+  })
+
+  it('never shows or changes one brand\'s work from another brand', async () => {
+    const [task] = await store.tasks('otca')
+    expect(await store.task('infojerman', task.id)).toBeUndefined()
+    await expect(store.transition('infojerman', task.id, 'cancelled', { actor: 'uji' })).rejects.toThrow(/tidak ditemukan/)
+    const [approval] = await store.approvals('otca')
+    await expect(store.decide('infojerman', approval.id, { decision: 'approved', actor: 'uji' })).rejects.toThrow(/tidak ditemukan/)
+    expect(await store.tasks('infojerman')).toEqual([])
+  })
+})
+
+describe('model routing and question parsing', () => {
+  it('sends normal work to Codex and only urgent work to the Claude pool', () => {
+    expect(routeFor({ urgent: false, complex: true })).toEqual({ source: 'codex', reasoningEffort: 'high' })
+    expect(routeFor({ urgent: true, complex: false })).toMatchObject({ source: 'litellm', provider: 'litellm', model: 'cepat' })
+    expect(routeFor({ urgent: true, complex: true })).toMatchObject({ model: 'final' })
+  })
+
+  it('reads the numbered questions, ignoring other lines', () => {
+    expect(parseQuestions('Pengantar\n1. Satu?\n2) **Dua?**\n- catatan\n11. bukan')).toEqual(['Satu?', 'Dua?'])
+  })
+})

@@ -1,0 +1,4 @@
+# Local development: the api runs on the host (npm run dev), so it reaches Hermes on 127.0.0.1.
+services:
+  hermes-otca:
+    ports: ["127.0.0.1:18642:8642"]

@@ -473,6 +473,29 @@ Event Specialist (dari blueprint L6):
 
 Brain/Pengguna: template TOR/SKB/LP/campaign (L6-07), `brands/otca/brand.md` RESMI, 10 tugas uji event.
 
+**Status L1 (2 Nov 2026, berjalan):**
+- **Selesai dan teruji:**
+  - Skema Postgres: brands, agents, events, tasks, task_events, approvals, assets, speaker_questions, cost_events, dan audit_log, dengan migrasi otomatis. Brand dan kru disinkronkan dari `context/`.
+  - Status tugas FR-11 dan status avatar FR-61.
+  - Approval per jenis pekerjaan. Penolakan wajib disertai catatan, lalu agen mengerjakan revisi.
+  - Isolasi `brand_id` di semua query, sudah diuji.
+  - Antrean BullMQ dengan retry 2 kali, `waiting_quota` saat kuota Codex habis, dan pemulihan setelah restart.
+  - Klien Hermes lewat `/v1/runs`. Tugas biasa memakai Codex; tugas mendesak memakai LiteLLM.
+  - Hermes membatasi tool agen: terminal, file, web, dan browser dimatikan.
+  - Workflow event untuk tahap tema, konsep ads, TOR/SKB, pertanyaan narasumber, campaign brief, dan PPT.
+  - Halaman **Event** dan **Approval**, diperbarui langsung lewat WebSocket.
+- **Uji nyata:**
+  - Tahap tema berhasil berjalan di Codex lalu masuk Approval.
+  - Revisi lewat UI menghasilkan versi 2 yang memuat catatan reviewer.
+- **Desain yang berubah dari rencana:**
+  - Satu profil Hermes per brand. Peran agen dikirim sebagai `instructions` di setiap run, tanpa profil per agen.
+  - Manager belum merouting permintaan bebas. Tugas event langsung ke Event Specialist; routing Manager menyusul di L2 saat Content Creator aktif.
+- **Belum dikerjakan:**
+  - Template TOR/SKB resmi, karena adapter Google Drive masih mock.
+  - Runtime lama `claude-service` untuk halaman Office, Agents, dan Task Board masih ada; diganti saat L5 menyambungkan kantor 3D.
+  - Output PPT masih berupa naskah slide, belum file .pptx.
+  - Gerbang L1: 10 tugas uji event dengan 70% disetujui tanpa revisi. Ini harus dijalankan bersama tim event.
+
 ### L2 · Content Creator OTCA + image ads event (5 hari)
 Dari blueprint L4 dan L6-02:
 - Agent Content Creator: riset anonim → angle; draft → final Sonnet ≤20%; skill carousel & caption.

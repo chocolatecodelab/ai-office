@@ -8,6 +8,7 @@ import { redactDashboard, redactOffice, redactTasks, redactUsage } from './priva
 import { installProfileLock, isHidden, type Privacy } from './profile-lock.js'
 import { API_VERSION } from './api-version.js'
 import { claudeService, CLAUDE_AGENTS } from './claude-service.js'
+import { attachOfficeSocket, officeRouter, startOffice } from './office/index.js'
 
 const HOST = '127.0.0.1'
 const PORT = Number(process.env.RUANG_PORT ?? process.env.MISSION_CONTROL_PORT) || 3001
@@ -334,6 +335,12 @@ app.get('/api/folders/:profile/file', folderRoute(async (request) => {
   return readFolderFile(folder, request.query.path, excluded)
 }))
 
+// Blueprint office API (docs/PLAN.md L1): Postgres + queue + Hermes. Starts in the background; its
+// routes answer 503 with the reason while Postgres or Redis is not running.
+const office = startOffice()
+office.catch((error: unknown) => console.error('Office API tidak aktif:', error instanceof Error ? error.message : error))
+app.use('/api/office', officeRouter(office))
+
 app.use('/api', (_request, response) => { response.status(404).json({ error: 'Not found' }) })
 
 if (existsSync(distDirectory)) {
@@ -347,4 +354,6 @@ app.use((error: unknown, _request: Request, response: Response, _next: NextFunct
   response.status(500).json({ error: 'Internal error' })
 })
 
-app.listen(PORT, HOST, () => console.log(`Claude AI Office listening on http://${HOST}:${PORT}${existsSync(distDirectory) ? ' (serving built UI)' : ' (API only; run the Vite dev server for the UI)'}`))
+const server = app.listen(PORT, HOST, () => console.log(`Claude AI Office listening on http://${HOST}:${PORT}${existsSync(distDirectory) ? ' (serving built UI)' : ' (API only; run the Vite dev server for the UI)'}`))
+
+attachOfficeSocket(server, office)

@@ -13,6 +13,7 @@ export default defineConfig({
   plugins: [react()],
   // three.js lives in its own lazily loaded chunk (the 3D office view).
   build: { chunkSizeWarningLimit: 1100 },
-  server: { proxy: { '/api': 'http://127.0.0.1:3001' } },
+  // ws: the office change feed (/api/office/ws) goes through the same proxy.
+  server: { proxy: { '/api': { target: `http://127.0.0.1:${process.env.RUANG_PORT || 3001}`, ws: true } } },
 })
 

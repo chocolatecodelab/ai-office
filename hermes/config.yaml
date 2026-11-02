@@ -1,12 +1,36 @@
 # Hermes config for one brand container (copied to data/<slug>/config.yaml by scripts/hermes-init.mjs).
-# Spike L0: LiteLLM is the only provider. L1 adds openai-codex (ChatGPT Plus) as primary once
-# logged in, with no fallback chain for normal tasks (docs/spike-hermes.md).
+# The api sends each agent's role from context/ as run instructions (docs/spike-hermes.md); this file
+# only picks the engine and limits what the agent may touch.
+
+# Codex (ChatGPT Plus) is the main engine (FR-12). No fallback_providers: when the Codex quota runs
+# out a run fails, and the api parks the task as waiting_quota instead of spending the Claude pool.
+# Urgent tasks ask for the litellm provider explicitly per run.
 model:
-  provider: litellm
-  default: cepat
+  provider: openai-codex
+  default: gpt-6-sol
 
 providers:
   litellm:
     api: http://litellm:4000/v1
     key_env: LITELLM_KEY_UMUM
     transport: openai_chat
+
+# Agents only think and draft. Anything that touches the outside world goes through the api after
+# approval (SEC-05, SEC-07), so tools that reach the host, the web or other systems are off.
+agent:
+  disabled_toolsets:
+    - terminal
+    - file
+    - code_execution
+    - browser
+    - web
+    - vision
+    - image_gen
+    - delegation
+    - cronjob
+    - connections
+    - kanban
+
+gateway:
+  api_server:
+    max_concurrent_runs: 4
