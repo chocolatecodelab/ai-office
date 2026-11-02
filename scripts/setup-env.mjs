@@ -42,4 +42,5 @@ create('litellm', {
   DATABASE_URL: `postgresql://office:${password}@postgres:5432/litellm`,
   ANTHROPIC_API_KEY: anthropic,
 })
+create('observability', {})
 if (!anthropic) console.log('! Anthropic API key tidak ditemukan di .env; isi ANTHROPIC_API_KEY di infra/env/litellm.env')

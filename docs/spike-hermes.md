@@ -1,6 +1,6 @@
 # Spike L0: Hermes + Codex
 
-Hasil uji hari 1 (2 November 2026) untuk pertanyaan di `docs/PLAN.md` L0. Status: **sebagian selesai**.
+Hasil uji hari 1 (2 November 2026) untuk pertanyaan di `docs/PLAN.md` L0. Status: **hampir selesai**; tinggal key Anthropic (ditunda) dan uji kondisi kuota habis.
 Jalur `api` → Hermes → LiteLLM sudah terbukti. Login Codex menunggu Pengguna karena memakai akun ChatGPT
 Plus (lihat [Yang perlu Pengguna lakukan](#yang-perlu-pengguna-lakukan)).
 
@@ -58,6 +58,20 @@ Plus (lihat [Yang perlu Pengguna lakukan](#yang-perlu-pengguna-lakukan)).
   - key video yang memanggil `final` ditolak (403);
   - key dengan budget $0 ditolak dengan `budget_exceeded` (422).
 
+### 5. Codex di container ✅ (2 Nov 2026)
+- `hermes auth add openai-codex --type oauth` di `hermes-otca` berhasil.
+  - Percobaan pertama ditolak OpenAI ("We couldn't authorize this device"); kode kedua diterima.
+  - Bila terulang, periksa izin *device code authorization* di ChatGPT **Settings → Security**.
+- Uji `hermes -z ... --provider openai-codex -m gpt-6-sol` menjawab dengan benar.
+- **Nama model Codex berbeda dari alias LiteLLM.** Codex menolak `cepat` ("not supported when using Codex with a ChatGPT account").
+  - Profil Hermes di L1 memakai model Codex (`gpt-6-sol`, `gpt-6-luna`, dan seterusnya), dengan tingkat reasoning tinggi/rendah lewat `--reasoning`.
+  - Alias `cepat`/`final`/`video` hanya dipakai untuk provider LiteLLM.
+
+### 6. Langfuse ✅ (2 Nov 2026)
+- Langfuse Cloud **tidak lagi menerima trace lewat `/api/public/ingestion`** ("Event type trace-create is not accepted"). Trace harus dikirim lewat OpenTelemetry: `POST /api/public/otel/v1/traces`.
+- `scripts/check-observability.mjs` sudah memakai OTLP, dan trace uji `uji-L0-07` diterima.
+- **L1:** saat menyambungkan LiteLLM dan `api` ke Langfuse, pakai integrasi berbasis OpenTelemetry (callback OTEL di LiteLLM, SDK Langfuse versi terbaru), bukan callback `langfuse` lama.
+
 ## Temuan yang mengubah rencana L1
 
 | Temuan | Dampak | Tindakan |
@@ -70,12 +84,9 @@ Plus (lihat [Yang perlu Pengguna lakukan](#yang-perlu-pengguna-lakukan)).
 
 1. **Isi key Anthropic** di `infra/env/litellm.env` (`ANTHROPIC_API_KEY=`). Key ini tidak ada di `.env` repo, jadi
    belum terisi otomatis. Setelah itu jalankan `docker compose -f infra/compose.yml -f infra/compose.local.yml restart litellm`.
-2. **Login Codex di container OTCA** (device code: buka URL yang muncul, masukkan kodenya, login ChatGPT):
-   ```bash
-   docker exec -it ai-office-hermes-otca-1 hermes auth add openai-codex
-   ```
-   Lalu cek `docker exec ai-office-hermes-otca-1 hermes auth status openai-codex`.
-3. **Buat akun Langfuse Cloud dan bot Telegram** (sisa L0-07). Kunci keduanya nanti diisi ke `infra/env/`.
+2. ~~Login Codex di container OTCA~~ ✅ selesai 2 Nov 2026.
+3. ~~Akun Langfuse Cloud dan bot Telegram~~ ✅ selesai 2 Nov 2026. Trace uji diterima Langfuse, dan alert uji
+   terkirim lewat `@otca_aioffice_bot` (`node scripts/check-observability.mjs`).
 4. Putuskan pertanyaan **[KONFIRMASI]** di bagian 2 (ketentuan memakai satu ChatGPT Plus untuk banyak container).
 
 Setelah langkah 1–2, sisa spike: menjalankan satu run Codex dan memaksa kondisi kuota habis untuk melihat

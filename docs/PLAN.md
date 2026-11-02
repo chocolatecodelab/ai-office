@@ -449,10 +449,8 @@ Builder:
   - postgres, redis, dan litellm sehat lewat Compose;
   - gerbang L0-06 lulus;
   - jalur `api` → Hermes → LiteLLM terbukti.
-- **Menunggu Pengguna:**
-  - key Anthropic di `infra/env/litellm.env`;
-  - login Codex di container;
-  - akun Langfuse dan bot Telegram.
+- **Selesai menyusul (2 Nov):** login Codex di `hermes-otca` (uji jawaban lewat ChatGPT Plus lulus); Langfuse Cloud dan bot Telegram (L0-07 lulus: trace dan alert uji terkirim).
+- **Ditunda Pengguna:** key Anthropic di `infra/env/litellm.env`. Tanpa key ini pool Claude belum bisa dipakai; Codex tetap jalan.
 - **Belum dikerjakan:** 40 error lint yang sudah ada sejak sebelum L0. Sebagian besar ada di runtime lama yang diganti di L1.
 - Detail di `docs/spike-hermes.md`.
 
