@@ -525,6 +525,10 @@ Dari blueprint L2:
 - Brain/Pengguna: `brand.md` sister brand RESMI (L2-07), tabel user & peran (L2-08).
 
 ### L5 · Kantor 3D Ruang, 4 lantai brand (4 hari)
+
+> **Diubah 2 Nov 2026:** kantor 3D dikerjakan **lebih dulu**, setelah L1, karena tidak menunggu data dari tim.
+> Detail, keputusan (gedung bertingkat, area santai bersama di lantai dasar, model GLB, panel tugas + approval),
+> dan tahapan K0–K7 (sekitar 12 hari kerja) ada di `docs/PLAN-KANTOR-3D.md`. L2–L4 bergeser sekitar 12 hari kerja.
 Dari blueprint L3, memakai kantor 3D Ruang:
 - Kantor 3D membaca status dari WebSocket `api` (L3-02).
 - Gedung 4 lantai, warna `visual.json`, jumlah meja dari `agents.json`; kamar tidur & lesehan diganti lantai brand (L3-03).

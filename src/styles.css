@@ -1625,3 +1625,8 @@ aside.office-panel { background: color-mix(in srgb, var(--surface) 96%, transpar
 .approval-head { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .approval-head h2 { font-size: 20px; letter-spacing: -.02em; margin: 4px 0 0; }
 @media (max-width: 900px) { .office-grid { grid-template-columns: 1fr; } .question-inputs, .office-detail-fields { grid-template-columns: 1fr; } }
+
+/* K0 test bench (src/pages/Lab3D.tsx). */
+.lab-3d { display: grid; grid-template-rows: auto 1fr; height: calc(100vh - 120px); min-height: 480px; margin-top: 18px; border: 1px solid var(--border); }
+.lab-3d-bar { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; padding: 10px 14px; font: 12px ui-monospace, monospace; color: var(--text-muted); border-bottom: 1px solid var(--border); }
+.lab-3d-bar input { width: 64px; background: var(--surface); color: var(--text); border: 1px solid var(--border-strong); }

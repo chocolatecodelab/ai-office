@@ -18,3 +18,6 @@ coverage
 # Blueprint stack: env files per service and per-brand Hermes data (memory, sessions, Codex login)
 infra/env/*.env
 data/
+
+# Raw 3D asset packs (large, re-downloadable; licences in docs/aset-3d.md). Optimised GLBs go to public/models/.
+aset-sumber/
