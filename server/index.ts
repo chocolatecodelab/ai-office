@@ -36,6 +36,11 @@ app.get('/api/claude/config', (_request, response) => {
 })
 
 app.post('/api/claude/config', (request, response) => {
+  // Anthropic keys live in infra/env/litellm.env and LiteLLM only (blueprint 6.1), never in this store.
+  if (request.body?.apiKey) {
+    response.status(400).json({ success: false, error: 'Kunci API tidak disimpan di Ruang. Isi di infra/env/litellm.env dan jalankan ulang LiteLLM.' })
+    return
+  }
   const result = claudeService.setConfig(request.body || {})
   response.json(result)
 })
