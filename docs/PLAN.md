@@ -43,6 +43,9 @@ Marketing / Event Specialist OTCA.
 |---|---|---|
 | Fondasi | 1 container **Hermes Agent per brand**, LiteLLM, PostgreSQL, Redis, worker video | [BP] |
 | Mesin AI | **Codex (ChatGPT Plus) utama**, Claude lewat LiteLLM sebagai cadangan dengan pool budget | [BP] |
+| Mesin per tahap | **Development:** Codex (ChatGPT Plus) untuk semua brand, satu langganan. **Production:** tambah Claude API lewat LiteLLM untuk pool umum dan pool video (Opus 5.5 untuk Video Editor), tetap dengan Codex sebagai mesin utama. Pilihan mesin diatur lewat konfigurasi per lingkungan, bukan cabang kode terpisah. | ditetapkan Pengguna, 3 Nov 2026 |
+| Pool gambar | GPT Image lewat **OpenAI API key** dengan pool $10, bukan ChatGPT Plus (langganan Plus tidak mencakup pemakaian API). Adapter tetap `mock` sampai key tersedia. | [BP] baris pool gambar, dikoreksi 3 Nov 2026 |
+| Login Codex | Setiap container Hermes punya login sendiri. Login OTCA disalin ke Info Jerman hanya untuk uji (3 Nov 2026): empat tugas berhasil, tetapi belum ada refresh token selama uji. Salinan sudah dihapus; pemantauan refresh masih berjalan. Info Jerman, Ciao Manda, dan Jepang Koey belum punya login. | uji 3 Nov 2026 |
 | Web & kantor 3D | **Ruang (repo ini) menjadi `web` + `api`**, termasuk kantor 3D-nya | [UBAH], ditetapkan Pengguna |
 | Prioritas agent | **Event Specialist OTCA pertama** (MVP), lalu agent yang dibutuhkan workflow event: Content Creator, lalu Digital Marketing | [UBAH], ditetapkan Pengguna |
 | Orkestrasi | **Manager per brand**, CEO global dihapus | [BP] |
@@ -345,12 +348,12 @@ docs/               PLAN.md, otca-agents.md, spike-hermes.md, runbook, panduan p
 
 | Kebutuhan | Status | Dipakai mulai |
 |---|---|---|
-| ChatGPT Plus (Codex) | tersedia | L1 |
-| Anthropic API key | tersedia; disimpan di LiteLLM saja | L0 |
+| ChatGPT Plus (Codex) | tersedia; dev memakai satu langganan untuk semua brand, login per container | L1 |
+| Anthropic API key | tersedia; disimpan di LiteLLM saja (tidak di Ruang, lihat `POST /api/claude/config`) | L0, production |
 | Google Workspace (SSO, Drive, Sheets) | tersedia; perlu OAuth client + service account | L1 (Drive), L4 (SSO) |
 | Meta developer app + akun IG uji | tersedia | L6 |
 | TikTok developer | tersedia | L6 |
-| OpenAI API key (GPT Image) | **belum**: kerangka + mock | L2 |
+| OpenAI API key (GPT Image, pool gambar) | **belum**: kerangka + mock; dibutuhkan untuk production | L2 |
 | Meta Ads akun iklan sandbox | **belum**: kerangka + mock | L3 |
 | Scalev API | **belum**: kerangka + mock | L3 |
 | WhatsApp Business API | **belum**: kerangka + mock | L6 |
@@ -396,7 +399,7 @@ Selama Brain belum ada, tugas Brain dikerjakan atau diputuskan Pengguna. Urutan 
 | ChatGPT Plus | $20 |
 | Pool umum (Haiku + Sonnet) | maks $20 |
 | Pool video (Opus 5.5) | maks $20 |
-| Pool gambar (GPT Image) | maks $10 (aktif setelah OpenAI API key ada) |
+| Pool gambar (GPT Image, OpenAI API, bukan ChatGPT Plus) | maks $10 (aktif setelah OpenAI API key ada) |
 | **Total** | **±$86 ≈ Rp1,55 jt** |
 
 ---
