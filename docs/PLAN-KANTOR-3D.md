@@ -229,7 +229,8 @@ Diperiksa ulang di `main` (5d758ba) pada server dev. Tidak ada perubahan data at
 - **K5 (panel meja):** panel agent terbuka dari daftar Tim dengan tab Chat, Tugas, Approval (1), Folder, dan Memori & Rules. Tab Approval menampilkan hasil yang menunggu keputusan. Tombol keputusan tidak diklik.
 
 **Gerbang yang belum tertutup dan belum bisa diukur tanpa mengubah data:**
-- Latensi status server sampai 3D ≤ 2 detik (K2). Perlu tugas uji yang benar-benar mengubah status; kalau memakai tugas produksi atau approval yang sudah ada, datanya ikut berubah.
+- ~~Latensi status server sampai 3D ≤ 2 detik (K2)~~ — **diukur 3 Nov 2026**: satu tugas uji `event.tema` (Codex, sekitar 5,6 ribu token). Transisi `running` diterima browser 27 ms setelah tercatat di database; `waiting_approval` 43 ms. Jam browser dan database berada di mesin yang sama, sehingga selisih kecil bisa berasal dari jam. Pengukuran mencakup penerimaan WebSocket sampai data diperbarui, bukan render frame. Gerbang lulus.
+  - Tugas uji itu menghasilkan satu approval terbuka ("Uji latensi WS (3 Nov)") yang perlu dibersihkan atau ditolak oleh pengguna.
 - Uji keramaian lift dan jalur (K4) dengan kru penuh.
 - Keputusan approve, tolak, dan beri tugas dengan provider nyata (K5). Saat ini hanya diuji dengan API tiruan dan database uji.
 - K6 (performa di HP) dan K7 (tiga staf) tetap sesuai `docs/UJI-KANTOR.md`.
