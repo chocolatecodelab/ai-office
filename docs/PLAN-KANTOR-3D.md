@@ -219,6 +219,21 @@ aset-sumber/ (tidak di-git, besar)  →  scripts/optimize-models.mjs (gltf-trans
 - Area loker ditambah bangku, rak buku, tanaman, sudut kopi, kulkas, dan jam dinding; semuanya di sisi kanan lorong lift.
 - Test regresi memeriksa dua pemain berseberangan dan saling menghadap, kaki di atas belt, kapasitas sofa/armchair, jalur menghindari meja kopi, serta pemetaan status pada keempat brand. Jalur treadmill boleh memasuki alat yang memang menjadi tujuan pengguna tersebut, tanpa memotong alat pengguna lain.
 
+## Verifikasi K3–K5 (3 Nov 2026)
+
+Diperiksa ulang di `main` (5d758ba) pada server dev. Tidak ada perubahan data atau keputusan selama verifikasi.
+
+- **Baseline:** 183 tes lulus (1 dilewati), typecheck client dan server bersih, lint lulus, build lulus.
+- **K3 (lingkungan):** sekat dan pintu ruang sudah ada di lantai dasar dan lantai brand (`GroundPartitions`, `BrandInterior` di `src/scene3d/building.tsx`). Tidak ada perubahan pada tahap ini.
+- **K4 (pose tujuh status):** Panduan status menampilkan tujuh contoh karakter dalam satu baris, dengan pose yang berbeda. Nama status ada sebagai label di kanvas 3D, sehingga tidak terbaca sebagai teks halaman. Pemeriksaan ini visual, bukan pengukuran.
+- **K5 (panel meja):** panel agent terbuka dari daftar Tim dengan tab Chat, Tugas, Approval (1), Folder, dan Memori & Rules. Tab Approval menampilkan hasil yang menunggu keputusan. Tombol keputusan tidak diklik.
+
+**Gerbang yang belum tertutup dan belum bisa diukur tanpa mengubah data:**
+- Latensi status server sampai 3D ≤ 2 detik (K2). Perlu tugas uji yang benar-benar mengubah status; kalau memakai tugas produksi atau approval yang sudah ada, datanya ikut berubah.
+- Uji keramaian lift dan jalur (K4) dengan kru penuh.
+- Keputusan approve, tolak, dan beri tugas dengan provider nyata (K5). Saat ini hanya diuji dengan API tiruan dan database uji.
+- K6 (performa di HP) dan K7 (tiga staf) tetap sesuai `docs/UJI-KANTOR.md`.
+
 ## 9. Tahapan kerja
 
 Total sekitar **12 hari kerja** (blueprint L3 hanya 6 hari karena memakai fork siap pakai; tambahan waktu untuk GLB dan 4 lantai).
