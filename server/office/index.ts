@@ -112,6 +112,13 @@ export function officeRouter(services: Promise<OfficeServices>): Router {
     return { days, ...local, langfuse }
   }))
 
+  // Recent tasks of every brand for the Task Board. Each read is scoped to one brand (FR-31).
+  router.get('/tasks', handle(async (office) => {
+    const brands = await office.store.brands()
+    const lists = await Promise.all(brands.map(async (brand) => (await office.store.tasks(brand.id, { limit: 60 })).map((task) => ({ ...task, brandName: brand.name }))))
+    return lists.flat().sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+  }))
+
   // Read-only view of the office's setup for the Settings page. Keys and tokens never leave the server.
   router.get('/settings', handle(async (office) => {
     const [usage, brands] = await Promise.all([office.store.usage(30), office.store.brands()])

@@ -31,5 +31,6 @@ export function integrationStatuses(integrations: Integrations): IntegrationStat
     { service: 'gpt-image', label: 'GPT Image', mode: 'mock', note: 'OpenAI API key belum ada (L2).' },
     { service: 'meta-ads', label: 'Meta Marketing API', mode: 'mock', note: 'Akun iklan sandbox belum ada (L3).' },
     { service: 'scalev', label: 'Scalev', mode: 'mock', note: 'API Scalev belum tersedia (L3).' },
+    { service: 'trello', label: 'Trello (papan tugas eksternal)', mode: 'mock', note: 'Mockup. Papan Ruang tetap sumber tugas; belum ada akun atau board Trello.' },
   ]
 }
