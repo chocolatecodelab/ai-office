@@ -227,6 +227,23 @@ export class OfficeStore {
     return result
   }
 
+  /**
+   * Stores a finished chat reply. Chat is conversation, not publication, so the reply finishes
+   * as done without an approval; every other kind of work goes through submitForApproval.
+   */
+  async completeChat(brandId: string, taskId: string, output: Parameters<OfficeStore['submitForApproval']>[2]): Promise<Task> {
+    return transaction(this.db, async (tx) => {
+      const current = await this.task(brandId, taskId, tx)
+      if (!current) throw new Error(`Tugas ${taskId} tidak ditemukan di brand ${brandId}.`)
+      if (current.kind !== 'konten.chat') throw new Error(`Tugas ${taskId} bukan balasan chat; gunakan submitForApproval.`)
+      const version = (await tx.query('SELECT coalesce(max(version), 0) + 1 AS next FROM assets WHERE task_id = $1', [taskId])).rows[0].next as number
+      await tx.query('INSERT INTO assets (task_id, brand_id, kind, version, content) VALUES ($1, $2, $3, $4, $5)', [taskId, brandId, current.kind, version, output.content])
+      await tx.query('INSERT INTO cost_events (task_id, brand_id, source, model, input_tokens, output_tokens) VALUES ($1, $2, $3, $4, $5, $6)',
+        [taskId, brandId, output.source, output.model, output.inputTokens, output.outputTokens])
+      return this.transition(brandId, taskId, 'done', { actor: `agent:${current.agentType}`, reason: `balasan chat v${version}`, patch: { result: output.content, error: null, run_id: output.runId } }, tx)
+    })
+  }
+
   async latestContentQc(brandId:string,taskId:string):Promise<ContentQc | undefined> {
     const {rows}=await this.db.query("SELECT payload FROM task_events WHERE brand_id=$1 AND task_id=$2 AND type='content_qc' ORDER BY id DESC LIMIT 1",[brandId,taskId])
     return rows[0]?.payload.report as ContentQc | undefined

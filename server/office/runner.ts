@@ -5,7 +5,7 @@ import { RUNNABLE } from './status.js'
 import type { OfficeStore, Task } from './store.js'
 
 // Runs one task on its brand's Hermes and maps the outcome onto the task status machine:
-// done → waiting_approval; Codex quota used up → waiting_quota until the reset; other failures are
+// done → waiting_approval (a chat reply finishes as done); Codex quota used up → waiting_quota until the reset; other failures are
 // retried twice (FR-13) before the task is marked failed.
 
 export const MAX_ATTEMPTS = 3 // the first try plus 2 retries
@@ -76,7 +76,9 @@ export async function runTask(deps: RunnerDeps, brandId: string, taskId: string)
       model: route.model, provider: route.provider, reasoningEffort: route.reasoningEffort,
     }, `${taskId}:${attempt}:${running.updatedAt}`)
     if (result.status === 'completed' && result.output.trim()) {
-      await store.submitForApproval(brandId, taskId, { content: result.output.trim(), runId: result.runId, source: route.source, model: route.model ?? result.model, inputTokens: result.inputTokens, outputTokens: result.outputTokens })
+      const output = { content: result.output.trim(), runId: result.runId, source: route.source, model: route.model ?? result.model, inputTokens: result.inputTokens, outputTokens: result.outputTokens }
+      if (task.kind === 'konten.chat') await store.completeChat(brandId, taskId, output)
+      else await store.submitForApproval(brandId, taskId, output)
       return { next: 'none' }
     }
     return fail(result.output || `Run berakhir dengan status ${result.status}.`, route.source === 'codex' && isQuotaFailure(result.output))

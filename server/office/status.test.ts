@@ -10,7 +10,8 @@ describe('task status machine', () => {
     expect(canTransition('waiting_approval', 'approved')).toBe(true)
   })
 
-  it('never skips approval or reopens finished work', () => {
+  it('finishes chat replies directly and never skips approval for work', () => {
+    expect(canTransition('running', 'done')).toBe(true)
     expect(canTransition('running', 'approved')).toBe(false)
     expect(canTransition('queued', 'done')).toBe(false)
     expect(canTransition('done', 'queued')).toBe(false)

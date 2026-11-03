@@ -9,7 +9,8 @@ export type AgentStatus = typeof AGENT_STATUSES[number]
 
 const TRANSITIONS: Record<TaskStatus, readonly TaskStatus[]> = {
   queued: ['running', 'paused', 'cancelled'],
-  running: ['waiting_approval', 'waiting_quota', 'queued', 'failed', 'paused', 'cancelled'],
+  // done is reached from running only by a chat reply, which needs no approval (Store.completeChat).
+  running: ['waiting_approval', 'waiting_quota', 'queued', 'failed', 'paused', 'cancelled', 'done'],
   waiting_quota: ['queued', 'running', 'paused', 'cancelled'],
   waiting_approval: ['approved', 'revision', 'cancelled'],
   revision: ['running', 'paused', 'cancelled'],
