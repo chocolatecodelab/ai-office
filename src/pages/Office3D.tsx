@@ -96,10 +96,10 @@ function Agent({ id, agent, spot, layout, floor, activities, motion, onArrive, t
         const offset = slot.sub(group.position)
         const distance=offset.length()
         walkingToQueue=distance>0.03
-        if(walkingToQueue) {
-          group.rotation.y=Math.atan2(offset.x,offset.z)
-          group.position.add(offset.normalize().multiplyScalar(Math.min(distance,Math.min(delta,0.1)*1.8)))
-        }
+        // Walk facing the way they go; once in the queue, face the lift door (+x).
+        const facing = walkingToQueue ? Math.atan2(offset.x,offset.z) : Math.PI/2
+        group.rotation.y += Math.atan2(Math.sin(facing-group.rotation.y),Math.cos(facing-group.rotation.y)) * (1-Math.exp(-12*delta))
+        if(walkingToQueue) group.position.add(offset.normalize().multiplyScalar(Math.min(distance,Math.min(delta,0.1)*1.8)))
       } else if (Math.abs(group.position.z-LIFT.z)>0.03) {
         path.current.unshift(new THREE.Vector3(LIFT_LANE_X,group.position.y,LIFT.z))
         next=path.current[0]
