@@ -232,7 +232,7 @@ Diperiksa ulang di `main` (5d758ba) pada server dev. Tidak ada perubahan data at
 - ~~Latensi status server sampai 3D ≤ 2 detik (K2)~~ — **diukur 3 Nov 2026**: satu tugas uji `event.tema` (Codex, sekitar 5,6 ribu token). Transisi `running` diterima browser 27 ms setelah tercatat di database; `waiting_approval` 43 ms. Jam browser dan database berada di mesin yang sama, sehingga selisih kecil bisa berasal dari jam. Pengukuran mencakup penerimaan WebSocket sampai data diperbarui, bukan render frame. Gerbang lulus.
   - Tugas uji itu menghasilkan satu approval terbuka ("Uji latensi WS (3 Nov)") yang perlu dibersihkan atau ditolak oleh pengguna.
 - Uji keramaian lift dan jalur (K4) dengan kru penuh: sudah diukur dengan model, tetapi belum lulus karena agen yang bertumpuk (lihat "Uji keramaian K4" di bawah).
-- Keputusan approve, tolak, dan beri tugas dengan provider nyata (K5). Saat ini hanya diuji dengan API tiruan dan database uji.
+- ~~Keputusan approve, tolak, dan beri tugas dengan provider nyata (K5)~~ — **diuji 3 Nov 2026 dari panel Event Specialist di kantor 3D**, dengan Codex (`gpt-6-sol`): tugas "Uji K5 1" diberikan, disetujui, dan berstatus `approved`; tugas "Uji K5 2" diberikan lalu ditolak dengan catatan, masuk `revision`, dikerjakan ulang, dan kembali ke `waiting_approval` (versi 2). Approval versi 2 kemudian disetujui sebagai pembersihan uji.
 - K6 (performa di HP) dan K7 (tiga staf) tetap sesuai `docs/UJI-KANTOR.md`.
 
 ## 9. Tahapan kerja
