@@ -231,7 +231,7 @@ Diperiksa ulang di `main` (5d758ba) pada server dev. Tidak ada perubahan data at
 **Gerbang yang belum tertutup dan belum bisa diukur tanpa mengubah data:**
 - ~~Latensi status server sampai 3D ≤ 2 detik (K2)~~ — **diukur 3 Nov 2026**: satu tugas uji `event.tema` (Codex, sekitar 5,6 ribu token). Transisi `running` diterima browser 27 ms setelah tercatat di database; `waiting_approval` 43 ms. Jam browser dan database berada di mesin yang sama, sehingga selisih kecil bisa berasal dari jam. Pengukuran mencakup penerimaan WebSocket sampai data diperbarui, bukan render frame. Gerbang lulus.
   - Tugas uji itu menghasilkan satu approval terbuka ("Uji latensi WS (3 Nov)") yang perlu dibersihkan atau ditolak oleh pengguna.
-- Uji keramaian lift dan jalur (K4) dengan kru penuh.
+- Uji keramaian lift dan jalur (K4) dengan kru penuh: sudah diukur dengan model, tetapi belum lulus karena agen yang bertumpuk (lihat "Uji keramaian K4" di bawah).
 - Keputusan approve, tolak, dan beri tugas dengan provider nyata (K5). Saat ini hanya diuji dengan API tiruan dan database uji.
 - K6 (performa di HP) dan K7 (tiga staf) tetap sesuai `docs/UJI-KANTOR.md`.
 
@@ -311,6 +311,19 @@ template TOR/SKB) berjalan paralel karena bergantung pada data dari tim. Tanggal
 - Tujuan trip lift dibaca dari segmen vertikal aktual, sehingga pergantian tujuan saat sedang berjalan tidak salah memesan lantai. Gerakan ke slot antre memakai jarak sebelum normalisasi dan animasi berjalan.
 - Tombol Panduan status di Office memperlihatkan tujuh contoh dengan komponen Agent yang sama seperti runtime. Contoh diberi penanda visual dan tidak mengubah API/server. Ketujuh pose diperiksa di browser dan bukti disimpan.
 - Pemeriksaan: 42 tes terkait lulus, ditambah regresi jalur berlawanan; lint, TypeScript, dan build berhasil. Gerbang visual tujuh status sudah diperiksa; pengukuran performa perangkat tetap K6 dan uji keramaian dengan staf tetap K7.
+
+### Uji keramaian K4 — kru penuh (3 Nov 2026)
+- **Metode:** `src/office3d/crowd.test.ts` menjalankan 18 agen (OTCA 6; tiga sister brand masing-masing 4) selama 900 detik waktu simulasi. Agen memakai `nextVisits`, `route`, dan `LiftQueue` yang sama dengan scene. Status tiap agen berganti idle dan working secara acak, sehingga seed mengubah lalu lintas (seed 7, 42, 2026). Antrean lift memakai slot antre Office3D, dan penumpang keluar lift dari slot kabin.
+- **Lolos:**
+  - Tidak ada agen yang menunggu lift lebih dari 120 detik.
+  - Penumpang dalam kabin maksimal 3–4 (batas 5).
+  - 156–166 kali naik lift per skenario; tiap agen minimal 5 kunjungan.
+- **Dicatat, belum menjadi gerbang:** waktu tunggu lift terlama 66–84 detik untuk satu lift dengan 18 agen.
+- **Gagal:** pasangan agen di lantai yang sama berada di bawah 0,5 m selama 833–890 episode per skenario. Episode terlama 59–65 detik. Batas "tidak bertumpuk lebih dari 5 detik" adalah ambang yang saya pilih untuk uji ini.
+- **Penyebab:** dua agen yang naik lift bersama lalu menuju arah yang sama mengikuti waypoint yang sama dengan kecepatan yang sama. Mereka bertumpuk sampai rutenya bercabang. Contoh: manager dan video-editor Ciao Manda di lajur lift lantai 3 pada detik ke-60. Jalan kaki tidak memakai offset lateral per agen, dan belum ada solver tabrakan.
+- **Batasan:** ini model, bukan render. Hasilnya belum dicek di browser atau di HP, dan kabin multi-lantai fisik tidak disimulasikan.
+- **Status:** gerbang keramaian K4 belum tertutup. Uji pemisahan ditandai `it.fails` sebagai celah yang diketahui. Hapus `.fails` setelah celah ini diperbaiki.
+- **Perbaikan yang diusulkan (belum dikerjakan):** offset lateral per agen pada jalur searah, serta penyebaran titik keluar lift. Perubahan ini menyentuh scene, jadi perlu persetujuan. Setelah itu uji dijalankan ulang.
 
 ### K5 — panel meja dan alur review
 - Panel Office dan halaman Approval memakai komponen ApprovalCard yang sama. Tiap approval menyimpan catatannya sendiri, memperlihatkan approver/jenis pekerjaan, menolak revisi tanpa catatan, dan menonaktifkan keputusan bila hasil belum tersedia.
