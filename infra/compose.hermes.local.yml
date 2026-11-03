@@ -2,3 +2,9 @@
 services:
   hermes-otca:
     ports: ["127.0.0.1:18642:8642"]
+  hermes-infojerman:
+    ports: ["127.0.0.1:18643:8642"]
+  hermes-ciaomanda:
+    ports: ["127.0.0.1:18644:8642"]
+  hermes-jepangkoey:
+    ports: ["127.0.0.1:18645:8642"]

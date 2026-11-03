@@ -1,22 +1,49 @@
-# One Hermes Agent container per brand (blueprint Bab 14). Spike L0 runs hermes-otca only.
+# One Hermes Agent container per brand (blueprint Bab 14). Each brand sees only its own context and data.
 # The api reaches it on the internal network through Hermes' OpenAI-compatible API server.
+x-hermes: &hermes
+  # nousresearch/hermes-agent:latest as of 2 Nov 2026, pinned by digest (SEC-12).
+  # Built from hermes/Dockerfile.langfuse: the pinned Hermes image plus the Langfuse SDK.
+  image: ai-office-hermes:langfuse
+  restart: unless-stopped
+  command: ["gateway", "run"]
+  environment:
+    - API_SERVER_ENABLED=true
+    - API_SERVER_HOST=0.0.0.0
+  depends_on:
+    litellm:
+      condition: service_healthy
+  mem_limit: 1536m
+
 services:
   hermes-otca:
-    # nousresearch/hermes-agent:latest as of 2 Nov 2026, pinned by digest (SEC-12).
-    # Built from hermes/Dockerfile.langfuse: the pinned Hermes image plus the Langfuse SDK.
-    image: ai-office-hermes:langfuse
-    restart: unless-stopped
-    command: ["gateway", "run"]
+    <<: *hermes
     env_file: env/hermes-otca.env
-    environment:
-      - API_SERVER_ENABLED=true
-      - API_SERVER_HOST=0.0.0.0
     volumes:
       - ../context/_shared:/context/_shared:ro
       - ../context/agents:/context/agents:ro
       - ../context/brands/otca:/brand:ro
       - ../data/otca:/opt/data
-    depends_on:
-      litellm:
-        condition: service_healthy
-    mem_limit: 1536m
+  hermes-infojerman:
+    <<: *hermes
+    env_file: env/hermes-infojerman.env
+    volumes:
+      - ../context/_shared:/context/_shared:ro
+      - ../context/agents:/context/agents:ro
+      - ../context/brands/infojerman:/brand:ro
+      - ../data/infojerman:/opt/data
+  hermes-ciaomanda:
+    <<: *hermes
+    env_file: env/hermes-ciaomanda.env
+    volumes:
+      - ../context/_shared:/context/_shared:ro
+      - ../context/agents:/context/agents:ro
+      - ../context/brands/ciaomanda:/brand:ro
+      - ../data/ciaomanda:/opt/data
+  hermes-jepangkoey:
+    <<: *hermes
+    env_file: env/hermes-jepangkoey.env
+    volumes:
+      - ../context/_shared:/context/_shared:ro
+      - ../context/agents:/context/agents:ro
+      - ../context/brands/jepangkoey:/brand:ro
+      - ../data/jepangkoey:/opt/data
