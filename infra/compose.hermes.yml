@@ -3,7 +3,8 @@
 services:
   hermes-otca:
     # nousresearch/hermes-agent:latest as of 2 Nov 2026, pinned by digest (SEC-12).
-    image: nousresearch/hermes-agent@sha256:9c5561579f3ffdf333401797094ac3a743738d6c25d40f4331c7bf77b694238d
+    # Built from hermes/Dockerfile.langfuse: the pinned Hermes image plus the Langfuse SDK.
+    image: ai-office-hermes:langfuse
     restart: unless-stopped
     command: ["gateway", "run"]
     env_file: env/hermes-otca.env
