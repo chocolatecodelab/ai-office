@@ -2,10 +2,15 @@ import crypto from 'node:crypto'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
+import type { BinaryLike, BinaryToTextEncoding } from 'node:crypto'
+
 // Polyfill for Node < 20.19 where crypto.hash does not exist
-if (typeof (crypto as any).hash !== 'function') {
-  ;(crypto as any).hash = function (algorithm: string, data: any, outputEncoding?: any) {
-    return crypto.createHash(algorithm).update(data).digest(outputEncoding)
+type HashFunction = (algorithm: string, data: BinaryLike, outputEncoding?: BinaryToTextEncoding) => string | Buffer
+const legacyCrypto = crypto as unknown as { hash?: HashFunction }
+if (typeof legacyCrypto.hash !== 'function') {
+  legacyCrypto.hash = (algorithm, data, outputEncoding) => {
+    const hash = crypto.createHash(algorithm).update(data)
+    return outputEncoding ? hash.digest(outputEncoding) : hash.digest()
   }
 }
 

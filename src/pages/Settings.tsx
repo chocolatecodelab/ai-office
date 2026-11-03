@@ -129,8 +129,8 @@ function ClaudeSettings() {
           setApiKey('')
         }
       }
-    } catch (err: any) {
-      setStatusMsg(`Gagal menyimpan: ${err.message}`)
+    } catch (err) {
+      setStatusMsg(`Gagal menyimpan: ${err instanceof Error ? err.message : String(err)}`)
     } finally {
       setSaving(false)
     }

@@ -92,8 +92,8 @@ app.post('/api/chat', async (request, response) => {
     })
     response.write(`data: ${JSON.stringify({ type: 'done', response: result.response, toolResults: result.toolResults })}\n\n`)
     response.end()
-  } catch (error: any) {
-    response.write(`data: ${JSON.stringify({ type: 'error', error: error?.message || 'Gagal memproses pesan ke Claude.' })}\n\n`)
+  } catch (error) {
+    response.write(`data: ${JSON.stringify({ type: 'error', error: (error instanceof Error && error.message) || 'Gagal memproses pesan ke Claude.' })}\n\n`)
     response.end()
   }
 })

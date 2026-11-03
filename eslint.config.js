@@ -5,7 +5,8 @@ import reactRefresh from 'eslint-plugin-react-refresh'
 import tseslint from 'typescript-eslint'
 
 export default tseslint.config(
-  { ignores: ['dist', 'build', 'node_modules'] },
+  // data/ is the Hermes container's runtime folder and aset-sumber/ the raw 3D packs; neither is source.
+  { ignores: ['dist', 'build', 'node_modules', 'data/**', 'aset-sumber/**'] },
   {
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     files: ['**/*.{ts,tsx}'],

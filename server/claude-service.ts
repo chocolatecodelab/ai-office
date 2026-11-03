@@ -211,12 +211,22 @@ const LEGACY_DEFAULT_NOTES = new Set([
 // The crew always comes from code; nothing about the agents themselves is stored.
 export const CLAUDE_AGENTS: AgentDefinition[] = [CEO_AGENT, ...OTCA_AGENTS]
 
+/** Arguments the CEO passes to the team tools (delegate_task, call_team_meeting, ...). */
+interface DelegateArgs {
+  target_agent?: string
+  task_title?: string
+  task_description?: string
+  priority?: number
+  agenda?: string
+  summary?: string
+}
+
 export interface ChatMessage {
   id: string
   role: 'user' | 'assistant'
   content: string
   timestamp: string
-  toolCalls?: Array<{ name: string; args: any; result?: any }>
+  toolCalls?: Array<{ name: string; args: Record<string, unknown>; result?: unknown }>
 }
 
 export interface ClaudeConfig {
@@ -795,10 +805,10 @@ class ClaudeOfficeService {
               size: content.length,
               content: content.slice(0, 10000)
             })
-          } catch {}
+          } catch { /* berkas yang tidak terbaca dilewati */ }
         }
       }
-    } catch {}
+    } catch { /* folder konteks opsional */ }
 
     const state = this.agentStates.get(agentId)
     if (state) {
@@ -835,15 +845,15 @@ class ClaudeOfficeService {
     return { success: true, notes: mem.notes }
   }
 
-  public addContextFile(agentId: string, filePath: string, content?: string): { success: boolean; contextFiles: any[] } {
+  public addContextFile(agentId: string, filePath: string, content?: string): { success: boolean; contextFiles: AgentMemoryData['contextFiles'] } {
     const mem = this.getAgentMemory(agentId)
     const fileName = filePath.replace(/\\/g, '/').split('/').pop() || filePath
     let fileContent = content || ''
     if (!fileContent && existsSync(filePath)) {
       try {
         fileContent = readFileSync(filePath, 'utf8')
-      } catch (err: any) {
-        fileContent = `(Error reading file: ${err.message})`
+      } catch (err) {
+        fileContent = `(Error reading file: ${err instanceof Error ? err.message : String(err)})`
       }
     }
 
@@ -865,7 +875,7 @@ class ClaudeOfficeService {
     return { success: true, contextFiles: mem.contextFiles }
   }
 
-  public removeContextFile(agentId: string, filePath: string): { success: boolean; contextFiles: any[] } {
+  public removeContextFile(agentId: string, filePath: string): { success: boolean; contextFiles: AgentMemoryData['contextFiles'] } {
     const mem = this.getAgentMemory(agentId)
     mem.contextFiles = mem.contextFiles.filter(cf => cf.path !== filePath && cf.name !== filePath)
     this.saveStorage()
@@ -885,7 +895,7 @@ class ClaudeOfficeService {
           const st = statSync(full)
           isDir = st.isDirectory()
           size = st.size
-        } catch {}
+        } catch { /* ukuran tidak diketahui; tampilkan tanpa ukuran */ }
         return { name, path: full, isDir, size }
       })
     } catch {
@@ -944,7 +954,7 @@ class ClaudeOfficeService {
     agentId: string,
     userText: string,
     onChunk?: (text: string) => void
-  ): Promise<{ response: string; toolResults?: any[] }> {
+  ): Promise<{ response: string; toolResults?: unknown[] }> {
     const agent = CLAUDE_AGENTS.find((a) => a.id === agentId)
     if (!agent) throw new Error(`Agent ${agentId} tidak ditemukan.`)
 
@@ -1079,7 +1089,7 @@ ${activeTasksList || 'Belum ada tugas tercatat.'}`
 
     try {
       let assistantReply = ''
-      const toolCallsExecuted: Array<{ name: string; args: any; result?: any }> = []
+      const toolCallsExecuted: Array<{ name: string; args: Record<string, unknown>; result?: unknown }> = []
 
       // Call Anthropic API with streaming
       const stream = await this.anthropicClient.messages.create({
@@ -1181,7 +1191,7 @@ ${activeTasksList || 'Belum ada tugas tercatat.'}`
       }, 10_000)
 
       return { response: assistantReply, toolResults: toolCallsExecuted }
-    } catch (error: any) {
+    } catch (error) {
       if (state) {
         state.state = 'Idle'
         state.activity = ''
@@ -1227,7 +1237,7 @@ ${activeTasksList || 'Belum ada tugas tercatat.'}`
     agentId: string,
     userText: string,
     onChunk?: (text: string) => void
-  ): Promise<{ response: string; toolResults?: any[] }> {
+  ): Promise<{ response: string; toolResults?: unknown[] }> {
     const state = this.agentStates.get(agentId)
     if (state) {
       state.state = 'Working'
@@ -1246,7 +1256,7 @@ ${activeTasksList || 'Belum ada tugas tercatat.'}`
       timestamp: new Date().toISOString()
     })
 
-    const toolResults: any[] = []
+    const toolResults: NonNullable<ChatMessage['toolCalls']> = []
     let reply = ''
     const isMeetingPrompt = /rapat|meeting|kumpul|berkumpul/i.test(userText)
     const isDelegatePrompt = /tugas|task|kampanye|proyek|buatkan|bagi|koordinasi/i.test(userText)
@@ -1369,7 +1379,7 @@ Halo! Saya **AI Video Editor**. Berikut konsep video yang saya rancang untuk: **
     return { response: reply, toolResults }
   }
 
-  private async handleToolCall(name: string, args: any): Promise<any> {
+  private async handleToolCall(name: string, args: DelegateArgs): Promise<Record<string, unknown>> {
     if (name === 'delegate_task') {
       if (!CLAUDE_AGENTS.some((a) => a.id === args.target_agent && a.id !== CEO_ID)) {
         return { success: false, error: `Agen ${args.target_agent} tidak ada di tim.` }
@@ -1379,7 +1389,7 @@ Halo! Saya **AI Video Editor**. Berikut konsep video yang saya rancang untuk: **
         title: args.task_title || 'Tugas Baru',
         description: args.task_description || '',
         status: 'todo',
-        assignee: args.target_agent,
+        assignee: args.target_agent ?? '',
         priority: args.priority || 2,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
@@ -1388,7 +1398,7 @@ Halo! Saya **AI Video Editor**. Berikut konsep video yang saya rancang untuk: **
       this.saveStorage()
 
       // Activate the targeted agent in the 3D office!
-      const targetState = this.agentStates.get(args.target_agent)
+      const targetState = this.agentStates.get(args.target_agent ?? '')
       if (targetState) {
         targetState.state = 'Working'
         targetState.room = 'Workspace'
@@ -1398,7 +1408,7 @@ Halo! Saya **AI Video Editor**. Berikut konsep video yang saya rancang untuk: **
         targetState.lastActive = new Date().toISOString()
 
         // Also add an introductory system note in target agent's chat history
-        const targetHistory = this.chatHistories.get(args.target_agent) || []
+        const targetHistory = this.chatHistories.get(args.target_agent ?? '') || []
         targetHistory.push({
           id: `msg-${Date.now()}`,
           role: 'assistant',
@@ -1560,7 +1570,7 @@ Halo! Saya **AI Video Editor**. Berikut konsep video yang saya rancang untuk: **
   public updateTaskStatus(id: string, newStatus: string): { success: boolean; task?: StoredTask } {
     const t = this.tasks.find((task) => task.id === id)
     if (!t) return { success: false }
-    t.status = newStatus as any
+    t.status = newStatus as StoredTask['status']
     t.updatedAt = new Date().toISOString()
 
     if (newStatus === 'running' && t.assignee) {
@@ -1592,8 +1602,8 @@ Halo! Saya **AI Video Editor**. Berikut konsep video yang saya rancang untuk: **
       id: `task-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       title: taskData.title || 'Tugas Baru',
       description: taskData.description || taskData.body || '',
-      status: (taskData.status as any) || 'todo',
-      assignee: (taskData.assignee as any) || 'ceo',
+      status: taskData.status || 'todo',
+      assignee: taskData.assignee || 'ceo',
       priority: taskData.priority || 2,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
@@ -1647,8 +1657,8 @@ Halo! Saya **AI Video Editor**. Berikut konsep video yang saya rancang untuk: **
       t.status = 'review'
       t.completedAt = new Date().toISOString()
       t.updatedAt = t.completedAt
-    } catch (err: any) {
-      res = `Gagal mengeksekusi tugas: ${err.message}`
+    } catch (err) {
+      res = `Gagal mengeksekusi tugas: ${err instanceof Error ? err.message : String(err)}`
       t.lastError = res
       t.status = 'todo'
       t.updatedAt = new Date().toISOString()
@@ -1802,9 +1812,9 @@ Halo! Saya **AI Video Editor**. Berikut konsep video yang saya rancang untuk: **
     try {
       const result = await this.sendMessage(job.agent, promptText)
       responseText = result.response
-    } catch (err: any) {
+    } catch (err) {
       job.lastRunOk = false
-      responseText = `Gagal menjalankan tugas: ${err.message}`
+      responseText = `Gagal menjalankan tugas: ${err instanceof Error ? err.message : String(err)}`
     }
 
     this.saveStorage()

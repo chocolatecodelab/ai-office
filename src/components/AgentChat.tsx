@@ -7,7 +7,7 @@ interface ChatMessage {
   role: 'user' | 'assistant'
   content: string
   timestamp: string
-  toolCalls?: Array<{ name: string; args: any; result?: any }>
+  toolCalls?: Array<{ name: string; args: Record<string, unknown>; result?: unknown }>
 }
 
 interface AgentChatProps {
@@ -82,12 +82,12 @@ export function AgentChat({ station, onStationUpdated, onSwitchTab }: AgentChatP
       try {
         const json = JSON.parse(importText)
         if (Array.isArray(json)) {
-          parsedMessages = json.map((item: any) => ({
+          parsedMessages = json.map((item: { role?: string; sender?: string; content?: string; text?: string }) => ({
             role: item.role === 'assistant' || item.sender === 'assistant' ? 'assistant' : 'user',
             content: item.content || item.text || JSON.stringify(item)
           }))
         } else if (json.chat_messages && Array.isArray(json.chat_messages)) {
-          parsedMessages = json.chat_messages.map((m: any) => ({
+          parsedMessages = json.chat_messages.map((m: { sender?: string; text?: string }) => ({
             role: m.sender === 'human' ? 'user' : 'assistant',
             content: m.text || ''
           }))
@@ -236,19 +236,19 @@ export function AgentChat({ station, onStationUpdated, onSwitchTab }: AgentChatP
               } else if (data.type === 'error') {
                 throw new Error(data.error)
               }
-            } catch (err) {
+            } catch {
               // json parse or stream error
             }
           }
         }
       }
-    } catch (err: any) {
+    } catch (err) {
       setMessages((prev) => [
         ...prev,
         {
           id: `err-${Date.now()}`,
           role: 'assistant',
-          content: `⚠️ Error: ${err.message || 'Terjadi kesalahan saat menghubungi Claude.'}`,
+          content: `⚠️ Error: ${(err instanceof Error && err.message) || 'Terjadi kesalahan saat menghubungi Claude.'}`,
           timestamp: new Date().toISOString()
         }
       ])
@@ -458,11 +458,11 @@ export function AgentChat({ station, onStationUpdated, onSwitchTab }: AgentChatP
                       <div className="tool-card-body">
                         {tc.name === 'delegate_task' && (
                           <p>
-                            <strong>{tc.args.task_title}</strong> → Ditugaskan ke: <code>{tc.args.target_agent}</code>
+                            <strong>{String(tc.args.task_title ?? '')}</strong> → Ditugaskan ke: <code>{String(tc.args.target_agent ?? '')}</code>
                           </p>
                         )}
                         {tc.name === 'call_team_meeting' && (
-                          <p>Agenda: {tc.args.agenda}</p>
+                          <p>Agenda: {String(tc.args.agenda ?? '')}</p>
                         )}
                       </div>
                     </div>

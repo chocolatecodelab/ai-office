@@ -134,8 +134,8 @@ export function Calendar() {
       } else {
         showToast(data.message || 'Gagal menambahkan jadwal.', true)
       }
-    } catch (err: any) {
-      showToast(err?.message || 'Gagal menghubungi server.', true)
+    } catch (err) {
+      showToast((err instanceof Error && err.message) || 'Gagal menghubungi server.', true)
     } finally {
       setSubmitting(false)
     }
@@ -181,8 +181,8 @@ export function Calendar() {
       } else {
         showToast(data.message || 'Gagal menjalankan tugas.', true)
       }
-    } catch (err: any) {
-      showToast(err?.message || 'Gagal mengeksekusi tugas.', true)
+    } catch (err) {
+      showToast((err instanceof Error && err.message) || 'Gagal mengeksekusi tugas.', true)
     } finally {
       setRunningJobId(null)
     }

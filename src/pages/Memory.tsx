@@ -107,7 +107,7 @@ function ClaudeAgentMemoryPanel({ agent, onOpenFolders }: { agent: AgentMemory; 
       const res = await fetch(`/api/agents/${agent.profile}/memory/notes/${index}`, { method: 'DELETE' })
       const data = await res.json()
       if (Array.isArray(data.notes)) setNotes(data.notes)
-    } catch {}
+    } catch { /* gagal memuat ulang: daftar tetap seperti semula */ }
   }
 
   const handleTogglePicker = async () => {
@@ -118,9 +118,9 @@ function ClaudeAgentMemoryPanel({ agent, onOpenFolders }: { agent: AgentMemory; 
         const res = await fetch(`/api/agents/${agent.profile}/workspace`)
         const data = await res.json()
         if (Array.isArray(data.files)) {
-          setWorkspaceFiles(data.files.filter((f: any) => !f.isDir))
+          setWorkspaceFiles(data.files.filter((f: { isDir?: boolean }) => !f.isDir))
         }
-      } catch {}
+      } catch { /* gagal memuat ulang: daftar tetap seperti semula */ }
     }
   }
 
@@ -136,7 +136,7 @@ function ClaudeAgentMemoryPanel({ agent, onOpenFolders }: { agent: AgentMemory; 
         setContextFiles(data.contextFiles)
         setPickingFiles(false)
       }
-    } catch {}
+    } catch { /* gagal memuat ulang: daftar tetap seperti semula */ }
   }
 
   const handleRemoveContextFile = async (filePath: string) => {
@@ -148,7 +148,7 @@ function ClaudeAgentMemoryPanel({ agent, onOpenFolders }: { agent: AgentMemory; 
       })
       const data = await res.json()
       if (Array.isArray(data.contextFiles)) setContextFiles(data.contextFiles)
-    } catch {}
+    } catch { /* gagal memuat ulang: daftar tetap seperti semula */ }
   }
 
   return (
