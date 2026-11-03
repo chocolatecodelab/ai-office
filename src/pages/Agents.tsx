@@ -1,35 +1,39 @@
-import { agentLabel } from '../format.ts'
-import type { OfficeSnapshot, RuntimeSnapshot } from '../types.ts'
+import { FLOOR_ORDER } from '../office3d/building.ts'
+import { AGENT_NAMES, AGENT_STATUS_LABELS, type OfficeAgent, type OfficeBrand } from '../office-api.ts'
 import { usePolling } from '../polling.ts'
-import { EmptyState, LoadingState, PageTitle, RuntimeBadge } from '../ui.tsx'
+import { EmptyState, LoadingState, PageTitle } from '../ui.tsx'
 import { PixelCharacter } from './OfficeDetails.tsx'
 
-/** Every Hermes profile on this machine is an agent, plus OpenCode when it is installed. */
-export function Agents({ runtime, pending = false }: { runtime: RuntimeSnapshot | null; pending?: boolean }) {
-  const office = usePolling<OfficeSnapshot>('/api/office', 15_000)
-  if (pending) return <><PageTitle eyebrow="CREW" title="Agents"/><LoadingState message="Reading runtime details..."/></>
-  if (!runtime || runtime.profiles.availability === 'unavailable') return <><PageTitle eyebrow="CREW" title="Agents"/><EmptyState title="Not Available">Daftar agen Claude belum dapat dimuat dari server.</EmptyState></>
-  const states = new Map(office.status === 'ready' ? office.data.stations.map((station) => [station.id, station]) : [])
-  const openCode = runtime.openCode.availability === 'available' ? runtime.openCode.data : undefined
-  const cards = [
-    ...runtime.profiles.data.map((profile) => ({ id: profile.name, kind: states.get(profile.name)?.role || 'Claude Agent', model: profile.model, gateway: profile.gateway })),
-    ...(openCode ? [{ id: 'opencode', kind: 'OpenCode (CLI tool)', model: openCode, gateway: undefined }] : []),
-  ]
-  return <><PageTitle eyebrow="CREW" title="Agents">Daftar agen dan spesialis Claude AI Office yang aktif di kantor virtual: CEO sebagai orchestrator dan kru Marketing & Creative OTCA.</PageTitle>
-    <section className="agent-grid">{cards.map((card) => {
-      const station = states.get(card.id)
-      return <article className="agent-card" key={card.id}>
-        <span className="folder-glyph" aria-hidden="true"><PixelCharacter agent={card.id}/></span>
-        <div className="agent-card-body">
-          <h2>{station?.privacy === 'locked' ? '🔒 ' : ''}{agentLabel(card.id)}</h2>
-          <p className="muted">{card.kind}</p>
-          <dl>
-            <div><dt>Model</dt><dd>{card.model}</dd></div>
-            <div><dt>Gateway</dt><dd>{card.gateway ? <RuntimeBadge source={{ availability: 'available', data: card.gateway }}/> : <span className="muted">None (CLI tool)</span>}</dd></div>
-            <div><dt>In the office</dt><dd>{station ? `${station.state}${station.activity ? ` · ${station.activity}` : ''}` : '—'}</dd></div>
-          </dl>
-        </div>
-      </article>
-    })}</section>
+// Every agent runs on its brand's Hermes gateway with Codex (ChatGPT Plus). Urgent tasks can fall
+// back to Claude through LiteLLM, see routeFor in server/office/runner.ts.
+const DEFAULT_MODEL = 'Codex · gpt-6-sol (ChatGPT Plus)'
+
+/** The agents of every brand, grouped by brand, read from the office API. */
+export function Agents() {
+  const brands = usePolling<OfficeBrand[]>('/api/office/brands', 15_000)
+  if (brands.status === 'pending') return <><PageTitle eyebrow="CREW" title="Agents"/><LoadingState message="Memuat agen..."/></>
+  if (brands.status === 'failed') return <><PageTitle eyebrow="CREW" title="Agents"/><EmptyState title="Tidak tersedia">Daftar agen belum dapat dimuat dari server.</EmptyState></>
+  const brandsByFloor = [...brands.data].sort((a, b) => FLOOR_ORDER.indexOf(a.id) - FLOOR_ORDER.indexOf(b.id))
+  const total = brands.data.reduce((sum, brand) => sum + brand.agents.length, 0)
+  return <>
+    <PageTitle eyebrow="CREW" title="Agents">{total} agen di {brands.data.length} brand. Setiap agen bekerja lewat Hermes milik brandnya.</PageTitle>
+    {brandsByFloor.map((brand) => <section className="agent-brand" key={brand.id}>
+      <h2 style={{ color: brand.color }}>{brand.name}{brand.paused ? ' · dijeda' : ''}</h2>
+      <section className="agent-grid">{brand.agents.map((agent) => <AgentCard agent={agent} key={agent.agentType}/>)}</section>
+    </section>)}
   </>
+}
+
+function AgentCard({ agent }: { agent: OfficeAgent }) {
+  return <article className="agent-card">
+    <span className="folder-glyph" aria-hidden="true"><PixelCharacter agent={agent.agentType}/></span>
+    <div className="agent-card-body">
+      <h3>{AGENT_NAMES[agent.agentType] ?? agent.agentType}</h3>
+      <dl>
+        <div><dt>Model</dt><dd>{DEFAULT_MODEL}</dd></div>
+        <div><dt>Status</dt><dd>{agent.active ? AGENT_STATUS_LABELS[agent.status] : 'Nonaktif'}</dd></div>
+        <div><dt>Tugas</dt><dd>{agent.currentTask ?? '—'}</dd></div>
+      </dl>
+    </div>
+  </article>
 }

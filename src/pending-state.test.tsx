@@ -7,7 +7,7 @@ import { Office } from './pages/Office.tsx'
 describe('pending application views', () => {
   it('renders loading instead of runtime placeholders on Stats and Agents', () => {
     const dashboard = renderToStaticMarkup(<Stats dashboard={null} pending/>)
-    const agents = renderToStaticMarkup(<Agents runtime={null} pending/>)
+    const agents = renderToStaticMarkup(<Agents/>)
 
     for (const markup of [dashboard, agents]) {
       expect(markup).toContain('Loading')
