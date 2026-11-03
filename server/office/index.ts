@@ -9,6 +9,8 @@ import { APPROVERS } from './approval-routes.js'
 import { readBrands, syncBrands } from './brands.js'
 import { OfficeBus, type OfficeChange } from './bus.js'
 import { EVENT_STAGES, EventWorkflow } from './event-workflow.js'
+import { langfuseUsage } from './langfuse-usage.js'
+import { poolStatuses } from './pools.js'
 import { createHermesClient, type HermesClient } from './hermes-client.js'
 import { TaskQueue, redisConnection } from './queue.js'
 import { TASK_STATUSES, type TaskStatus } from './status.js'
@@ -21,6 +23,18 @@ import { OfficeStore } from './store.js'
 // No login until L4 (Google SSO + RBAC); every action is recorded under this actor meanwhile.
 const LOCAL_ACTOR = 'pengguna-lokal'
 
+// Roles of blueprint FR-23. They are shown in Settings only; nothing enforces them before L4.
+const OFFICE_ROLES = [
+  { id: 'super-admin', label: 'Super Admin', note: 'Tidak dapat mengaktifkan iklan.' },
+  { id: 'brand-manager', label: 'Brand Manager' },
+  { id: 'approver-konten', label: 'Approver konten' },
+  { id: 'approver-iklan', label: 'Approver iklan' },
+  { id: 'approver-event', label: 'Approver event' },
+  { id: 'budget-approver', label: 'Budget Approver', note: 'Satu-satunya peran yang dapat mengaktifkan iklan (FR-24).' },
+  { id: 'operator', label: 'Operator' },
+  { id: 'viewer', label: 'Viewer' },
+]
+
 export interface OfficeServices {
   db: Db
   store: OfficeStore
@@ -28,6 +42,7 @@ export interface OfficeServices {
   queue: TaskQueue
   bus: OfficeBus
   integrations: Integrations
+  settings?: OfficeSettings
 }
 
 export interface OfficeOptions { settings?: OfficeSettings; contextDir?: string; hermes?: HermesClient; startWorker?: boolean }
@@ -56,7 +71,7 @@ export async function startOffice(options: OfficeOptions = {}): Promise<OfficeSe
     const recovered = await queue.recover(store)
     if (recovered) console.log(`Office: ${recovered} tugas dijadwalkan ulang setelah start.`)
   }
-  return { db, store, events: new EventWorkflow(store, bus, integrations.drive), queue, bus, integrations }
+  return { db, store, events: new EventWorkflow(store, bus, integrations.drive), queue, bus, integrations, settings }
 }
 
 const message = (error: unknown) => error instanceof Error ? error.message : String(error)
@@ -88,6 +103,27 @@ export function officeRouter(services: Promise<OfficeServices>): Router {
     approvers: APPROVERS,
     stages: EVENT_STAGES.map(({ id, label, level, agentType, requires }) => ({ id, label, level, agentType, requires })),
   })))
+
+  // Usage of the whole office: token runs from Postgres, and Langfuse's view of the same model calls.
+  router.get('/usage', handle(async (office, request) => {
+    const requested = Number(request.query.days)
+    const days = [1, 7, 30].includes(requested) ? requested : 7
+    const [local, langfuse] = await Promise.all([office.store.usage(days), langfuseUsage(office.settings?.langfuse, days)])
+    return { days, ...local, langfuse }
+  }))
+
+  // Read-only view of the office's setup for the Settings page. Keys and tokens never leave the server.
+  router.get('/settings', handle(async (office) => {
+    const [usage, brands] = await Promise.all([office.store.usage(30), office.store.brands()])
+    return {
+      access: { actor: LOCAL_ACTOR, sso: false, note: 'Login Google SSO dan RBAC aktif di L4. Sampai itu semua aksi tercatat sebagai pengguna-lokal.' },
+      roles: OFFICE_ROLES,
+      integrations: integrationStatuses(office.integrations),
+      pools: poolStatuses(usage.models),
+      gateways: brands.map((brand) => ({ brandId: brand.id, name: brand.name, configured: Boolean(office.settings?.hermes(brand.id)) })),
+      langfuse: { configured: Boolean(office.settings?.langfuse) },
+    }
+  }))
 
   router.get('/brands', handle(async (office) => Promise.all((await office.store.brands()).map(async (brand) => {
     const [agents, summary] = await Promise.all([office.store.agents(brand.id), office.store.summary(brand.id)])

@@ -32,6 +32,28 @@ export interface EventDetail { event: OfficeEvent; stages: EventStage[]; questio
 export interface IntegrationStatus { service: string; label: string; mode: 'mock' | 'sandbox' | 'live'; note: string }
 export interface OfficeStatus { integrations: IntegrationStatus[] }
 
+export interface OfficeSettingsView {
+  access: { actor: string; sso: boolean; note: string }
+  roles: Array<{ id: string; label: string; note?: string }>
+  integrations: IntegrationStatus[]
+  pools: Array<{ id: string; label: string; budgetUsd: number; models: string[]; spentUsd: number; percent: number; alert: 'ok' | '50' | '80' | 'over' }>
+  gateways: Array<{ brandId: string; name: string; configured: boolean }>
+  langfuse: { configured: boolean }
+}
+
+export interface UsageFigures { runs: number; tokens: number; inputTokens: number; outputTokens: number; costUsd: number }
+export interface LangfuseModelUsage { model: string; generations: number; inputTokens: number; outputTokens: number; costUsd: number }
+export interface LangfuseUsage extends Omit<UsageFigures, 'runs' | 'tokens'> { status: 'off' | 'ok' | 'error'; message?: string; generations: number; environments: string[]; models: LangfuseModelUsage[] }
+export interface OfficeUsage {
+  days: 1 | 7 | 30
+  totals: UsageFigures
+  brands: Array<UsageFigures & { brandId: string; label: string }>
+  agents: Array<UsageFigures & { brandId: string; agentType: string; brandName: string }>
+  kinds: Array<UsageFigures & { kind: string }>
+  models: Array<UsageFigures & { source: string; model: string }>
+  langfuse: LangfuseUsage
+}
+
 export const TASK_STATUS_LABELS: Record<TaskStatus, string> = {
   queued: 'Antre', running: 'Dikerjakan', waiting_quota: 'Menunggu kuota', waiting_approval: 'Menunggu approval',
   revision: 'Revisi', approved: 'Disetujui', done: 'Selesai', failed: 'Gagal', paused: 'Dijeda', cancelled: 'Dibatalkan',

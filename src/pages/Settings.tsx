@@ -1,7 +1,10 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useState, type FormEvent } from 'react'
 import { accessRequest, downloadCode, generateCode, type AccessStatus } from '../access.ts'
 import { formatDateTime } from '../format.ts'
-import { PageTitle } from '../ui.tsx'
+import { formatCost } from '../usage.ts'
+import { type OfficeSettingsView } from '../office-api.ts'
+import { usePolling } from '../polling.ts'
+import { EmptyState, LoadingState, PageTitle } from '../ui.tsx'
 import { ProfileLockSettings } from './ProfileLockSettings.tsx'
 
 type Mode = 'idle' | 'set' | 'off'
@@ -88,111 +91,41 @@ function TurnOff({ onDone, onCancel }: { onDone: (status: AccessStatus) => void;
   </form>
 }
 
-function ClaudeSettings() {
-  const [apiKey, setApiKey] = useState('')
-  const [model, setModel] = useState('claude-sonnet-5-5')
-  const [hasKey, setHasKey] = useState(false)
-  const [keyMasked, setKeyMasked] = useState('')
-  const [statusMsg, setStatusMsg] = useState('')
-  const [saving, setSaving] = useState(false)
+const ALERT_TEXT: Record<OfficeSettingsView['pools'][number]['alert'], string> = { ok: 'Aman', '50': 'Sudah 50%', '80': 'Sudah 80%', over: 'Melewati budget' }
+const MODE_BADGE: Record<OfficeSettingsView['integrations'][number]['mode'], string> = { mock: 'muted', sandbox: '', live: 'good' }
 
-  useEffect(() => {
-    fetch('/api/claude/config')
-      .then((res) => res.json())
-      .then((data) => {
-        setHasKey(Boolean(data.hasKey))
-        if (data.defaultModel) setModel(data.defaultModel)
-        if (data.keyMasked) setKeyMasked(data.keyMasked)
-      })
-      .catch(() => { })
-  }, [])
-
-  const handleSave = async (e: FormEvent) => {
-    e.preventDefault()
-    setSaving(true)
-    setStatusMsg('')
-    try {
-      const res = await fetch('/api/claude/config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
-          defaultModel: model
-        })
-      })
-      const data = await res.json()
-      if (data.success) {
-        setStatusMsg('Pengaturan Claude berhasil disimpan!')
-        setHasKey(true)
-        if (apiKey.trim()) {
-          setKeyMasked(`${apiKey.trim().slice(0, 7)}...${apiKey.trim().slice(-4)}`)
-          setApiKey('')
-        }
-      }
-    } catch (err) {
-      setStatusMsg(`Gagal menyimpan: ${err instanceof Error ? err.message : String(err)}`)
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  return (
-    <section className="card settings-card" aria-labelledby="claude-title">
-      <div className="settings-head">
-        <div>
-          <p className="eyebrow">INTEGRASI AI</p>
-          <h2 id="claude-title">Anthropic Claude API</h2>
-        </div>
-        <span className={`badge ${hasKey ? 'good' : 'warn'}`}>
-          {hasKey ? 'Terhubung' : 'Belum Ada Key'}
-        </span>
-      </div>
-      <p className="muted">
-        AI Office ini ditenagai langsung oleh model Claude (CEO Orchestrator dan kru Marketing & Creative OTCA).
-      </p>
-
-      <form onSubmit={handleSave} style={{ display: 'grid', gap: '14px', marginTop: '16px' }}>
-        <div>
-          <label className="field-label" htmlFor="claude-key">
-            Anthropic API Key {hasKey && <span style={{ color: 'var(--accent)' }}>({keyMasked})</span>}
-          </label>
-          <input
-            id="claude-key"
-            className="text-input"
-            type="password"
-            placeholder={hasKey ? 'Masukkan key baru untuk mengganti...' : 'sk-ant-api03-...'}
-            value={apiKey}
-            onChange={(e) => setApiKey(e.target.value)}
-            autoComplete="off"
-          />
-          <p className="small-note">Dapatkan API key dari <a href="https://console.anthropic.com" target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>console.anthropic.com</a>.</p>
-        </div>
-
-        <div>
-          <label className="field-label" htmlFor="claude-model">Pilihan Model Default</label>
-          <select
-            id="claude-model"
-            className="text-input"
-            value={model}
-            onChange={(e) => setModel(e.target.value)}
-            style={{ width: '100%', maxWidth: '400px' }}
-          >
-            <option value="claude-sonnet-5-5">Claude 5.5 Sonnet (Terbaik & Direkomendasikan)</option>
-            <option value="claude-haiku-5-5">Claude 5.5 Haiku (Paling Cepat & Hemat Token)</option>
-            <option value="claude-opus-5-5">Claude 5.5 Opus (Penalaran Kompleks)</option>
-          </select>
-        </div>
-
-        {statusMsg && <p className="form-success">{statusMsg}</p>}
-
-        <div>
-          <button type="submit" className="primary-button" disabled={saving}>
-            {saving ? 'Menyimpan...' : 'Simpan Pengaturan Claude'}
-          </button>
-        </div>
-      </form>
+/** Office setup as blueprint describes it: access and roles, integration modes, LiteLLM pools, and gateways. Read only. */
+function OfficeSetup() {
+  const setup = usePolling<OfficeSettingsView>('/api/office/settings', 60_000)
+  if (setup.status === 'pending') return <section className="card settings-card"><LoadingState message="Memuat pengaturan kantor..."/></section>
+  if (setup.status === 'failed') return <section className="card settings-card"><EmptyState title="Belum tersedia">Pengaturan kantor belum bisa dibaca. {setup.message}</EmptyState></section>
+  const { access, roles, integrations, pools, gateways, langfuse } = setup.data
+  return <>
+    <section className="card settings-card" aria-labelledby="office-access">
+      <div className="settings-head"><div><p className="eyebrow">AKSES</p><h2 id="office-access">Akses dan peran</h2></div><span className="badge muted">{access.sso ? 'SSO aktif' : 'Belum SSO'}</span></div>
+      <p className="muted">{access.note}</p>
+      <p className="small-note">Aktor saat ini: {access.actor}</p>
+      <ul className="role-list">{roles.map((role) => <li key={role.id}><strong>{role.label}</strong>{role.note && <span className="muted"> · {role.note}</span>}</li>)}</ul>
     </section>
-  )
+    <section className="card settings-card" aria-labelledby="office-integrations">
+      <div className="settings-head"><div><p className="eyebrow">INTEGRASI</p><h2 id="office-integrations">Mode integrasi</h2></div></div>
+      <p className="small-note">Setiap adapter berjalan sebagai mock, sandbox, atau live (FR-40). Tanpa kredensial, adapter tetap mock.</p>
+      <ul className="role-list">{integrations.map((item) => <li key={item.service}><strong>{item.label}</strong> <span className={`badge ${MODE_BADGE[item.mode]}`}>{item.mode}</span>{item.note && <span className="muted"> · {item.note}</span>}</li>)}</ul>
+    </section>
+    <section className="card settings-card" aria-labelledby="office-pools">
+      <div className="settings-head"><div><p className="eyebrow">BUDGET</p><h2 id="office-pools">Pool LiteLLM</h2></div></div>
+      <p className="small-note">Pemakaian 30 hari dari LiteLLM. Budget hanya diubah di LiteLLM, tidak dari halaman ini.</p>
+      <ul className="role-list">{pools.map((pool) => <li key={pool.id}>
+        <strong>{pool.label}</strong> <span className="muted">· {pool.models.join(', ')}</span>
+        <div><progress max={pool.budgetUsd} value={Math.min(pool.spentUsd, pool.budgetUsd)}/> {formatCost(pool.spentUsd)} dari {formatCost(pool.budgetUsd)} · <span className={`badge ${pool.alert === 'ok' ? 'muted' : pool.alert === 'over' ? 'danger' : 'good'}`}>{ALERT_TEXT[pool.alert]}</span></div>
+      </li>)}</ul>
+    </section>
+    <section className="card settings-card" aria-labelledby="office-gateways">
+      <div className="settings-head"><div><p className="eyebrow">GATEWAY</p><h2 id="office-gateways">Hermes dan Langfuse</h2></div></div>
+      <ul className="role-list">{gateways.map((gateway) => <li key={gateway.brandId}><strong>Hermes · {gateway.name}</strong> <span className={`badge ${gateway.configured ? 'good' : 'muted'}`}>{gateway.configured ? 'Terhubung' : 'Belum'}</span></li>)}
+        <li><strong>Langfuse</strong> <span className={`badge ${langfuse.configured ? 'good' : 'muted'}`}>{langfuse.configured ? 'Terhubung' : 'Belum'}</span></li></ul>
+    </section>
+  </>
 }
 
 export function Settings({ access, onAccessChange }: { access: AccessStatus | undefined; onAccessChange: (status: AccessStatus) => void }) {
@@ -203,10 +136,11 @@ export function Settings({ access, onAccessChange }: { access: AccessStatus | un
     const result = await accessRequest('lock')
     if (result.ok) onAccessChange(result.status)
   }
-  return <><PageTitle eyebrow="RUANG" title="Settings">Settings of this Ruang server and Claude AI engine.</PageTitle>
-    <ClaudeSettings />
+  return <><PageTitle eyebrow="RUANG" title="Settings">Pengaturan kantor: akses, integrasi, budget, dan gateway. Rahasia tidak diisi dari halaman ini; kunci API tetap di infra/env.</PageTitle>
+    <OfficeSetup />
     <section className="card settings-card" aria-labelledby="access-title">
-      <div className="settings-head"><div><p className="eyebrow">SECURITY</p><h2 id="access-title">Access code</h2></div>{access && <span className={`badge ${access.enabled ? 'good' : 'muted'}`}>{access.enabled ? 'On' : 'Off'}</span>}</div>
+      <div className="settings-head"><div><p className="eyebrow">SECURITY</p><h2 id="access-title">Kunci akses sementara</h2></div>{access && <span className={`badge ${access.enabled ? 'good' : 'muted'}`}>{access.enabled ? 'On' : 'Off'}</span>}</div>
+      <p className="small-note">Sementara. Diganti login Google SSO dan RBAC di L4.</p>
       <p className="muted">Ask for a code every time Ruang is opened in a browser. Like an API key: you generate (or choose) it once, download it, and enter it when asked. Only a hash is stored on the server.</p>
       {!access ? <p className="muted">Loading…</p> : <>
         {access.enabled && access.since && <p className="small-note">Set {formatDateTime(access.since)}.</p>}

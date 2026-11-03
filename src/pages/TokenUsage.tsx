@@ -10,10 +10,10 @@ function share(part: number, whole: number): string {
   return value > 0 && value < 1 ? '<1%' : `${Math.round(value)}%`
 }
 
-interface Row { key: string; label: string; value: number; detail: string; muted?: boolean; note?: string }
+export interface Row { key: string; label: string; value: number; detail: string; muted?: boolean; note?: string }
 
 /** One horizontal bar per row, scaled to the largest; the exact numbers are in the tooltip. */
-function BarRows({ label, rows, total, unit = 'tokens' }: { label: string; rows: Row[]; total: number; unit?: string }) {
+export function BarRows({ label, rows, total, unit = 'tokens' }: { label: string; rows: Row[]; total: number; unit?: string }) {
   const max = Math.max(1, ...rows.map((row) => row.value))
   return <div className="usage-bars" role="list" aria-label={label}>{rows.map((row) => <div role="listitem" key={row.key} className={row.muted ? 'muted-row' : undefined} title={row.detail}>
     <span className="usage-name">{row.label}</span>

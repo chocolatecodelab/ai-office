@@ -22,10 +22,23 @@ export function readEnvFile(file: string): Record<string, string> {
 
 export interface HermesEndpoint { url: string; key: string }
 
+export interface LangfuseConfig { baseUrl: string; publicKey: string; secretKey: string }
+
 export interface OfficeSettings {
   databaseUrl?: string
   redisUrl: string
   hermes(brand: string): HermesEndpoint | undefined
+  langfuse?: LangfuseConfig
+}
+
+/** Langfuse keys for the usage view: the environment first, then observability.env, then Hermes' copy. */
+function langfuseConfig(env: NodeJS.ProcessEnv, envDir: string): LangfuseConfig | undefined {
+  const observability = readEnvFile(join(envDir, 'observability.env'))
+  const hermes = readEnvFile(join(envDir, 'hermes-otca.env'))
+  const publicKey = env.LANGFUSE_PUBLIC_KEY || observability.LANGFUSE_PUBLIC_KEY || env.HERMES_LANGFUSE_PUBLIC_KEY || hermes.HERMES_LANGFUSE_PUBLIC_KEY
+  const secretKey = env.LANGFUSE_SECRET_KEY || observability.LANGFUSE_SECRET_KEY || env.HERMES_LANGFUSE_SECRET_KEY || hermes.HERMES_LANGFUSE_SECRET_KEY
+  const baseUrl = env.LANGFUSE_HOST || observability.LANGFUSE_HOST || env.HERMES_LANGFUSE_BASE_URL || hermes.HERMES_LANGFUSE_BASE_URL || 'https://cloud.langfuse.com'
+  return publicKey && secretKey ? { baseUrl: baseUrl.replace(/\/+$/, ''), publicKey, secretKey } : undefined
 }
 
 export function officeSettings(env: NodeJS.ProcessEnv = process.env, root = REPO_ROOT): OfficeSettings {
@@ -37,6 +50,7 @@ export function officeSettings(env: NodeJS.ProcessEnv = process.env, root = REPO
   return {
     databaseUrl: env.OFFICE_DATABASE_URL || localDatabase,
     redisUrl: env.OFFICE_REDIS_URL || 'redis://127.0.0.1:16379',
+    langfuse: langfuseConfig(env, envDir),
     hermes(brand) {
       const name = brand.toUpperCase()
       const key = env[`HERMES_${name}_KEY`] || readEnvFile(join(envDir, `hermes-${brand}.env`)).API_SERVER_KEY

@@ -51,6 +51,15 @@ export interface Asset { id: string; taskId: string; kind: string; version: numb
 
 export interface AgentView { brandId: string; agentType: string; active: boolean; paused: boolean; status: AgentStatus; currentTask: string | null }
 
+export interface UsageRow { runs: number; inputTokens: number; outputTokens: number; costUsd: number; tokens: number }
+export interface OfficeUsage {
+  totals: UsageRow
+  brands: Array<UsageRow & { brandId: string; label: string }>
+  agents: Array<UsageRow & { brandId: string; agentType: string; brandName: string }>
+  kinds: Array<UsageRow & { kind: string }>
+  models: Array<UsageRow & { source: string; model: string }>
+}
+
 export interface NewTask {
   agentType: string
   kind: string
@@ -108,6 +117,22 @@ export class OfficeStore {
       (SELECT count(*)::int FROM approvals WHERE brand_id = $1 AND decision IS NULL) AS approvals,
       (SELECT count(*)::int FROM tasks WHERE brand_id = $1 AND status = 'waiting_quota') AS "waitingQuota"`, [brandId])
     return rows[0]
+  }
+
+  /** Runs and tokens of the last `days` days, from cost_events, grouped per brand, agent, kind of work and model. */
+  async usage(days: number): Promise<OfficeUsage> {
+    const since = `c.created_at >= now() - ($1::int * interval '1 day')`
+    const sums = 'count(*)::int AS runs, coalesce(sum(c.input_tokens), 0)::int AS "inputTokens", coalesce(sum(c.output_tokens), 0)::int AS "outputTokens", coalesce(sum(c.cost_usd), 0)::float AS "costUsd"'
+    const [brands, agents, kinds, models] = await Promise.all([
+      this.db.query(`SELECT c.brand_id AS "brandId", coalesce(b.name, c.brand_id) AS label, ${sums} FROM cost_events c LEFT JOIN brands b ON b.id = c.brand_id WHERE ${since} GROUP BY 1, 2`, [days]),
+      this.db.query(`SELECT c.brand_id AS "brandId", coalesce(t.agent_type, '—') AS "agentType", coalesce(b.name, c.brand_id) AS "brandName", ${sums} FROM cost_events c LEFT JOIN tasks t ON t.id = c.task_id LEFT JOIN brands b ON b.id = c.brand_id WHERE ${since} GROUP BY 1, 2, 3`, [days]),
+      this.db.query(`SELECT coalesce(t.kind, '—') AS kind, ${sums} FROM cost_events c LEFT JOIN tasks t ON t.id = c.task_id WHERE ${since} GROUP BY 1`, [days]),
+      this.db.query(`SELECT c.source, c.model, ${sums} FROM cost_events c WHERE ${since} GROUP BY 1, 2`, [days]),
+    ])
+    const rows = (result: pg.QueryResult) => result.rows.map((row) => ({ ...row, tokens: row.inputTokens + row.outputTokens }))
+    const totals = rows(brands).reduce((sum, row) => ({ runs: sum.runs + row.runs, tokens: sum.tokens + row.tokens, inputTokens: sum.inputTokens + row.inputTokens, outputTokens: sum.outputTokens + row.outputTokens, costUsd: sum.costUsd + row.costUsd }), { runs: 0, tokens: 0, inputTokens: 0, outputTokens: 0, costUsd: 0 })
+    const byTokens = (a: { tokens: number }, b: { tokens: number }) => b.tokens - a.tokens
+    return { totals, brands: rows(brands).sort(byTokens), agents: rows(agents).sort(byTokens), kinds: rows(kinds).sort(byTokens), models: rows(models).sort(byTokens) }
   }
 
   async agents(brandId: string): Promise<AgentView[]> {
