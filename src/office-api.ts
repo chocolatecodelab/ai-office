@@ -41,6 +41,9 @@ export interface OfficeSettingsView {
   langfuse: { configured: boolean }
 }
 
+export interface CalendarEntry { id: string; brandId: string; brandName: string; title: string; tanggal: string | null; date?: string; time?: string }
+export interface OfficeCalendar { entries: CalendarEntry[]; googleCalendar?: IntegrationStatus }
+
 export interface UsageFigures { runs: number; tokens: number; inputTokens: number; outputTokens: number; costUsd: number }
 export interface LangfuseModelUsage { model: string; generations: number; inputTokens: number; outputTokens: number; costUsd: number }
 export interface LangfuseUsage extends Omit<UsageFigures, 'runs' | 'tokens'> { status: 'off' | 'ok' | 'error'; message?: string; generations: number; environments: string[]; models: LangfuseModelUsage[] }

@@ -9,6 +9,7 @@ import { APPROVERS } from './approval-routes.js'
 import { readBrands, syncBrands } from './brands.js'
 import { OfficeBus, type OfficeChange } from './bus.js'
 import { EVENT_STAGES, EventWorkflow } from './event-workflow.js'
+import { parseEventDate } from './event-date.js'
 import { langfuseUsage } from './langfuse-usage.js'
 import { poolStatuses } from './pools.js'
 import { createHermesClient, type HermesClient } from './hermes-client.js'
@@ -117,6 +118,15 @@ export function officeRouter(services: Promise<OfficeServices>): Router {
     const brands = await office.store.brands()
     const lists = await Promise.all(brands.map(async (brand) => (await office.store.tasks(brand.id, { limit: 60 })).map((task) => ({ ...task, brandName: brand.name }))))
     return lists.flat().sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+  }))
+
+  // Events of every brand with their date read from the free text, for the Calendar. Dates that cannot be read are sent without one.
+  router.get('/calendar', handle(async (office) => {
+    const brands = await office.store.brands()
+    const lists = await Promise.all(brands.map(async (brand) => (await office.events.list(brand.id)).map((event) => ({
+      id: event.id, brandId: brand.id, brandName: brand.name, title: event.title, tanggal: event.details.tanggal ?? null, ...parseEventDate(event.details.tanggal),
+    }))))
+    return { entries: lists.flat(), googleCalendar: integrationStatuses(office.integrations).find((item) => item.service === 'google-calendar') }
   }))
 
   // Read-only view of the office's setup for the Settings page. Keys and tokens never leave the server.
