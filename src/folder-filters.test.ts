@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { NO_FILTERS, fileKind, filterAssets, isFiltered } from './folder-filters.ts'
+import { NO_FILTERS, fileKind, filterAssets, isFiltered, thumbText } from './folder-filters.ts'
 import type { AssetItem } from './office-api.ts'
 
 const now = Date.parse('2026-11-04T12:00:00Z')
 const asset = (patch: Partial<AssetItem>): AssetItem => ({
-  id: 'a', taskId: 't', brandId: 'otca', brandName: 'Official OTCA', kind: 'artifact', version: 2, name: 'x.md', mime: null, downloadable: false, size: 100,
+  id: 'a', taskId: 't', brandId: 'otca', brandName: 'Official OTCA', kind: 'artifact', version: 2, name: 'x.md', mime: null, downloadable: false, size: 100, excerpt: '',
   title: 'Chat', agentType: 'manager', createdAt: '2026-11-04T11:00:00Z', ...patch,
 })
 const ASSETS = [
@@ -60,5 +60,18 @@ describe('folder filters', () => {
 
   it('leaves one filter out so its own counts do not depend on it', () => {
     expect(ids({ kind: 'pdf', brand: 'otca' }, 'kind')).toEqual(['1', '4', '5', '2'])
+  })
+})
+
+describe('thumbText', () => {
+  const card = (patch: Partial<Parameters<typeof thumbText>[0]>) => ({ kind: 'artifact', name: 'a.md', excerpt: '', ...patch })
+  it('drops Markdown marks and keeps the words', () => {
+    expect(thumbText(card({ excerpt: '# Rencana\n\n- **Satu** [tautan](http://x.y)\n- dua\n\n| a | b |\n|---|---|' }))).toBe('Rencana\n• Satu tautan\n• dua\na b')
+  })
+  it('strips tags and styles from a web file', () => {
+    expect(thumbText(card({ name: 'p.html', excerpt: '<style>p{}</style><h1>Hai</h1><p>dunia</p>' }))).toBe('Hai dunia')
+  })
+  it('leaves data files as they are', () => {
+    expect(thumbText(card({ name: 'd.csv', excerpt: 'a,b\n1,2' }))).toBe('a,b\n1,2')
   })
 })

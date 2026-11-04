@@ -237,6 +237,24 @@ describe.skipIf(!available)('office store, runner and event workflow (Postgres)'
     expect((await store.artifactFiles('infojerman', [task.id])).size).toBe(0)
   })
 
+  it('prints a stored PDF again from its Markdown, for its own brand only', async () => {
+    const task = await store.createTask('otca', { agentType: 'manager', kind: 'konten.chat', title: 'rr-1', brief: 'x', createdBy: 'uji' })
+    await runTask(deps(scriptedHermes([{ output: '~~~file:ulang.pdf\n# Cetak Ulang\n\nIsi dokumen.\n~~~' }])), 'otca', task.id)
+    const pdf = (await store.assetList('otca', 100)).find((item) => item.taskId === task.id && item.name === 'ulang.pdf')!
+    const before = await store.assetFile('otca', pdf.id)
+
+    const { size } = await store.rerenderPdf('otca', pdf.id, 'uji')
+    const after = await store.assetFile('otca', pdf.id)
+    expect(after?.data.subarray(0, 5).toString()).toBe('%PDF-')
+    expect(after?.data.length).toBe(size)
+    expect((await store.assetList('otca', 100)).find((item) => item.id === pdf.id)?.size).toBe(size)
+    expect(before?.data.length).toBeGreaterThan(0)
+
+    await expect(store.rerenderPdf('infojerman', pdf.id, 'uji')).rejects.toThrow(/tidak ditemukan/)
+    const note = (await store.assetList('otca', 100)).find((item) => item.taskId === task.id && item.kind === 'konten.chat')!
+    await expect(store.rerenderPdf('otca', note.id, 'uji')).rejects.toThrow(/tidak ditemukan/)
+  }, 60_000)
+
   it('runs an agent on the model set for it, and goes back to the default after a reset', async () => {
     const make = (title: string) => store.createTask('otca', { agentType: 'digital-marketing', kind: 'konten.chat', title, brief: 'x', createdBy: 'uji' })
     await store.setRoute('digital-marketing', 'simple', { source: 'codex', model: 'gpt-uji', reasoningEffort: 'high' }, 'uji')

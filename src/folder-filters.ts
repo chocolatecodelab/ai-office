@@ -49,3 +49,26 @@ export function filterAssets(assets: AssetItem[], filters: Filters, now = Date.n
   }
   return [...passing].sort(order[filters.sort])
 }
+
+/** The few lines a card shows as its page thumbnail: Markdown marks and HTML tags removed, whitespace tidied. */
+export function thumbText(asset: Pick<AssetItem, 'kind' | 'name' | 'excerpt'>): string {
+  const web = fileKind(asset) === 'web'
+  const text = (web ? asset.excerpt.replace(/<(style|script)[\s\S]*?<\/\1>/gi, ' ').replace(/<[^>]*>/g, ' ') : asset.excerpt)
+  const plain = fileKind(asset) === 'data' ? text : text
+    .replace(/^\s{0,3}#{1,6}\s+/gm, '')
+    .replace(/^\s*(?:[-*+]|\d+\.)\s+/gm, '• ')
+    .replace(/^\s*>\s?/gm, '')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/[*_`|]/g, '')
+    .replace(/^[-: ]{3,}$/gm, '')
+  return plain.split('\n').map((line) => line.replace(/[ \t]+/g, ' ').trim()).filter(Boolean).join('\n').slice(0, 420)
+}
+
+/** An agent's file keeps its own name; a reply is saved as <title>-v<version>.md. */
+export function fileName(asset: AssetItem): string {
+  if (asset.name) return asset.name
+  const slug = asset.title.replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-|-$/g, '').slice(0, 60) || 'hasil'
+  return `${slug}-v${asset.version}.md`
+}
+
+export const assetLabel = (asset: AssetItem) => asset.name ?? asset.title

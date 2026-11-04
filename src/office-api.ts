@@ -53,7 +53,8 @@ export interface OfficeModels { profile: 'dev' | 'prod'; codexModels: string[]; 
 export interface ModelTestResult { ok: boolean; status: string; reply: string; inputTokens: number; outputTokens: number; durationMs: number }
 
 export interface HealthCheck { name: string; ok: boolean; detail: string; ms: number }
-export interface AssetItem { id: string; taskId: string; brandId: string; brandName: string; kind: string; version: number; name: string | null; mime: string | null; downloadable: boolean; size: number; title: string; agentType: string; createdAt: string }
+export interface AssetItem { id: string; taskId: string; brandId: string; brandName: string; kind: string; version: number; name: string | null; mime: string | null; downloadable: boolean; size: number; excerpt: string; title: string; agentType: string; createdAt: string }
+export type AssetPreview = { type: 'document' | 'html'; html: string } | { type: 'text'; text: string }
 export interface OfficeAssets { assets: AssetItem[]; drive?: IntegrationStatus }
 
 export interface ActivityItem {

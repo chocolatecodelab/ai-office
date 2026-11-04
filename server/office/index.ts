@@ -10,6 +10,7 @@ import { readBrands, syncBrands } from './brands.js'
 import { OfficeBus, type OfficeChange } from './bus.js'
 import { EVENT_STAGES, EventWorkflow } from './event-workflow.js'
 import { parseEventDate } from './event-date.js'
+import { buildPreview } from './asset-preview.js'
 import { extractArtifacts } from './artifacts.js'
 import { localFileStore } from './file-store.js'
 import { systemHealth } from './health.js'
@@ -166,6 +167,16 @@ export function officeRouter(services: Promise<OfficeServices>): Router {
       response.status(400).json({ error: message(error) })
     }
   })
+  // A saved result laid out for the Folders preview (asset-preview.ts); the page is shown in a sandboxed frame.
+  router.get('/brands/:brand/assets/:id/preview', handle(async (office, request) => {
+    const brandId = await brandOf(office, request)
+    const asset = await office.store.asset(brandId, String(request.params.id))
+    if (!asset) throw new Error('Hasil tidak ditemukan.')
+    const brand = (await office.store.brands()).find((item) => item.id === brandId)!
+    return buildPreview({ name: asset.name, kind: asset.kind, title: asset.title, content: asset.content }, brand)
+  }))
+  router.post('/brands/:brand/assets/:id/rerender', handle(async (office, request) =>
+    office.store.rerenderPdf(await brandOf(office, request), String(request.params.id), LOCAL_ACTOR)))
   router.get('/brands/:brand/assets/:id', handle(async (office, request) => {
     const asset = await office.store.asset(await brandOf(office, request), String(request.params.id))
     if (!asset) throw new Error('Hasil tidak ditemukan.')

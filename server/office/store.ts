@@ -61,7 +61,7 @@ export interface ActivityEntry {
   objectType?: string; from?: TaskStatus; to?: TaskStatus; reason?: string | null
 }
 
-export interface AssetListItem { id: string; taskId: string; kind: string; version: number; name: string | null; mime: string | null; downloadable: boolean; size: number; title: string; agentType: string; createdAt: string }
+export interface AssetListItem { id: string; taskId: string; kind: string; version: number; name: string | null; mime: string | null; downloadable: boolean; size: number; excerpt: string; title: string; agentType: string; createdAt: string }
 
 export interface TaskUsage { runs: number; inputTokens: number; outputTokens: number; durationMs: number | null; source: 'codex' | 'litellm'; model: string }
 
@@ -403,10 +403,10 @@ export class OfficeStore {
   /** The brand's latest saved results with the task they belong to, newest first, without their content. */
   async assetList(brandId: string, limit = 40): Promise<AssetListItem[]> {
     const { rows } = await this.db.query(
-      `SELECT a.id, a.task_id, a.kind, a.version, a.name, a.mime, (a.storage_key IS NOT NULL) AS downloadable, a.created_at, coalesce(a.size_bytes, length(a.content))::int AS size, t.title, t.agent_type
+      `SELECT a.id, a.task_id, a.kind, a.version, a.name, a.mime, (a.storage_key IS NOT NULL) AS downloadable, a.created_at, coalesce(a.size_bytes, length(a.content))::int AS size, left(a.content, 700) AS excerpt, t.title, t.agent_type
          FROM assets a JOIN tasks t ON t.id = a.task_id AND t.brand_id = a.brand_id
         WHERE a.brand_id = $1 ORDER BY a.created_at DESC, a.version DESC LIMIT $2`, [brandId, limit])
-    return rows.map((row) => ({ id: row.id, taskId: row.task_id, kind: row.kind, version: row.version, name: row.name ?? null, mime: row.mime ?? null, downloadable: row.downloadable, size: row.size, title: row.title, agentType: row.agent_type, createdAt: iso(row.created_at)! }))
+    return rows.map((row) => ({ id: row.id, taskId: row.task_id, kind: row.kind, version: row.version, name: row.name ?? null, mime: row.mime ?? null, downloadable: row.downloadable, size: row.size, excerpt: row.excerpt, title: row.title, agentType: row.agent_type, createdAt: iso(row.created_at)! }))
   }
 
   /** One saved result with its content, only when it belongs to the brand. */
@@ -423,6 +423,24 @@ export class OfficeStore {
     const { rows } = await this.db.query('SELECT name, mime, storage_key FROM assets WHERE brand_id = $1 AND id::text = $2 AND storage_key IS NOT NULL', [brandId, assetId])
     const row = rows[0]
     return row ? { data: await this.files.read(row.storage_key), mime: row.mime ?? 'application/octet-stream', name: row.name ?? 'berkas' } : undefined
+  }
+
+  /**
+   * Prints a stored PDF again from the Markdown it was made from, with the current renderer, and points the asset
+   * at the new file. Used when a PDF was made by an older or fallback renderer. The old file stays in the store.
+   */
+  async rerenderPdf(brandId: string, assetId: string, actor: string): Promise<{ size: number }> {
+    if (!this.files) throw new Error('Penyimpanan berkas belum aktif.')
+    const { rows } = await this.db.query(`SELECT name, content FROM assets WHERE brand_id = $1 AND id::text = $2 AND storage_key IS NOT NULL AND mime = 'application/pdf'`, [brandId, assetId])
+    if (!rows[0]) throw new Error('PDF tidak ditemukan di brand ini.')
+    const brand = (await this.brands()).find((item) => item.id === brandId)
+    const pdf = await renderDocumentPdf(rows[0].content as string, { name: rows[0].name as string, brand: brandStyle(brandId, brand?.name ?? brandId, brand?.color ?? '') })
+    const key = await this.files.put(brandId, 'pdf', pdf)
+    await transaction(this.db, async (tx) => {
+      await tx.query('UPDATE assets SET storage_key = $3, size_bytes = $4 WHERE brand_id = $1 AND id::text = $2', [brandId, assetId, key, pdf.length])
+      await audit(tx, { actor, action: 'asset.rerender', objectType: 'asset', objectId: assetId, brandId, after: { size: pdf.length } })
+    })
+    return { size: pdf.length }
   }
 
   /** The stored files of chat tasks (id and name per task), so a chat can link a file card to its download. */
