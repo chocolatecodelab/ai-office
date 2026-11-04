@@ -1720,3 +1720,39 @@ aside.office-panel { background: color-mix(in srgb, var(--surface) 96%, transpar
 .office-qc summary { cursor:pointer; font-weight:600; }
 .office-qc p,.office-qc small { color:var(--text-muted); font-size:12px; }
 .office-qc small { display:block; margin:4px 0 12px; }
+
+/* Folders: a three-pane file browser (brands, files, preview). Colours come from the theme tokens, so dark and light both work. */
+.fb { align-items: start; display: grid; gap: 14px; grid-template-columns: 200px minmax(0, 1.5fr) minmax(0, 1fr); margin-top: 18px; }
+.fb-brands { display: grid; gap: 4px; position: sticky; top: 12px; }
+.fb-brands button { align-items: center; background: transparent; border: 1px solid transparent; border-radius: 6px; color: var(--text-muted); cursor: pointer; display: flex; font-family: inherit; font-size: 13px; gap: 8px; justify-content: space-between; padding: 8px 10px; text-align: left; }
+.fb-brands button:hover { background: var(--surface-2); color: var(--text); }
+.fb-brands button[aria-pressed="true"] { background: var(--surface-2); border-color: var(--active-border); color: var(--text); }
+.fb-brands b { background: var(--surface-3); border-radius: 9px; font: 11px ui-monospace, monospace; padding: 1px 8px; }
+.fb-files, .fb-preview { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; min-width: 0; }
+.fb-toolbar { align-items: center; border-bottom: 1px solid var(--border); display: flex; gap: 12px; padding: 10px 12px; }
+.fb-toolbar > :first-child { flex: 1; min-width: 0; }
+.fb-count { color: var(--text-muted); font: 11px ui-monospace, monospace; white-space: nowrap; }
+.fb-scroll { max-height: 68vh; overflow: auto; }
+.fb-table { border-collapse: collapse; font-size: 13px; width: 100%; }
+.fb-table th, .fb-table td { border-bottom: 1px solid var(--border); padding: 9px 12px; text-align: left; vertical-align: middle; }
+.fb-table thead th { background: var(--surface-2); color: var(--text-dim); font: 600 11px ui-monospace, monospace; letter-spacing: .06em; position: sticky; text-transform: uppercase; top: 0; z-index: 1; }
+.fb-table tbody tr:hover { background: var(--surface-2); }
+.fb-table tbody tr.selected { background: var(--surface-2); box-shadow: inset 3px 0 0 var(--accent); }
+.fb-table td { color: var(--text-muted); white-space: nowrap; }
+.fb-table tbody th { font-weight: 400; width: 46%; }
+.fb-name { background: none; border: 0; color: var(--text); cursor: pointer; display: grid; font-family: inherit; font-size: 13px; font-weight: 600; gap: 2px; padding: 0; text-align: left; }
+.fb-name small { color: var(--text-muted); font-family: inherit; font-size: 12px; font-weight: 400; letter-spacing: normal; }
+.fb-version { border: 1px solid var(--border-strong); border-radius: 4px; color: var(--text-muted); font: 11px ui-monospace, monospace; padding: 1px 6px; }
+.fb-version.latest { border-color: var(--accent); color: var(--accent); }
+.fb-preview { max-height: calc(100vh - 24px); overflow: auto; padding: 14px; position: sticky; top: 12px; }
+.fb-preview h2 { font-size: 16px; line-height: 1.3; margin: 0 0 10px; overflow-wrap: anywhere; }
+.fb-meta { display: grid; gap: 8px 14px; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 0 0 12px; }
+.fb-meta dt { color: var(--text-dim); font: 11px ui-monospace, monospace; letter-spacing: .05em; text-transform: uppercase; }
+.fb-meta dd { font-size: 13px; margin: 2px 0 0; overflow-wrap: anywhere; }
+.fb-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.fb-content { background: var(--surface-3); border: 1px solid var(--border); border-radius: 6px; font: 12.5px/1.6 ui-monospace, monospace; margin: 12px 0 0; max-height: 52vh; overflow: auto; overflow-wrap: anywhere; padding: 12px; white-space: pre-wrap; }
+.fb-empty { color: var(--text-muted); font-size: 13px; margin: 0; padding: 28px 12px; text-align: center; }
+.fb button:focus-visible, .fb input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.fb-sr { border: 0; clip: rect(0 0 0 0); height: 1px; margin: -1px; overflow: hidden; padding: 0; position: absolute; width: 1px; }
+@media (max-width: 1180px) { .fb { grid-template-columns: 180px minmax(0, 1fr); } .fb-preview { grid-column: 1 / -1; max-height: none; position: static; } }
+@media (max-width: 720px) { .fb { grid-template-columns: minmax(0, 1fr); } .fb-brands { display: flex; overflow-x: auto; position: static; } .fb-brands button { flex: none; } .fb-hide { display: none; } .fb-table tbody th { width: auto; } }

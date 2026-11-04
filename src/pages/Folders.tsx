@@ -1,124 +1,101 @@
-import { useEffect, useState } from 'react'
-import { LOCKED_EVENT } from '../access.ts'
-import { formatBytes, formatDateTime } from '../format.ts'
+import { useState } from 'react'
+import { formatDateTime } from '../format.ts'
+import { FLOOR_ORDER } from '../office3d/building.ts'
+import { AGENT_NAMES, officeRequest, type AssetItem, type OfficeAssets } from '../office-api.ts'
 import { usePolling } from '../polling.ts'
-import type { RequestState } from '../request-state.ts'
-import type { FolderAgent, FolderAgentsSnapshot, FolderFile, FolderListing } from '../types.ts'
-import { EmptyState, LoadingState, PageTitle, SearchInput, SourceStatus, Unavailable } from '../ui.tsx'
-import { PixelCharacter } from './OfficeDetails.tsx'
-import { PrivateGate } from '../ProfileLock.tsx'
-import { agentPrivacy, useProfileLock } from '../profile-lock.ts'
+import { EmptyState, LoadingState, PageTitle, SearchInput } from '../ui.tsx'
 
-function folderUrl(agent: string, kind: 'list' | 'file', path: string): string {
-  return `/api/folders/${encodeURIComponent(agent)}/${kind}?path=${encodeURIComponent(path)}`
+interface Preview { id: string; content?: string; error?: string }
+
+const sizeLabel = (bytes: number) => bytes < 1024 ? `${bytes} B` : `${(bytes / 1024).toFixed(1)} KB`
+
+function fileName(asset: AssetItem): string {
+  const slug = asset.title.replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-|-$/g, '').slice(0, 60) || 'hasil'
+  return `${slug}-v${asset.version}.md`
 }
 
-type FolderRequest<T> = RequestState<T> & { error?: string; reload: () => void }
-
-/** Like loadSnapshot, but keeps the server's explanation (permission denied, not found…). */
-async function loadWithReason<T>(url: string): Promise<RequestState<T> & { error?: string }> {
-  try {
-    const response = await fetch(url)
-    const body = await response.json().catch(() => undefined) as (T & { error?: unknown; locked?: unknown }) | undefined
-    if (response.ok && body) return { status: 'ready', data: body }
-    if (response.status === 401 && body?.locked === true) window.dispatchEvent(new Event(LOCKED_EVENT))
-    return { status: 'failed', error: typeof body?.error === 'string' ? body.error : `Request failed (HTTP ${response.status}).` }
-  } catch {
-    return { status: 'failed', error: 'The Ruang API could not be reached.' }
-  }
+function download(asset: AssetItem, content: string) {
+  const url = URL.createObjectURL(new Blob([content], { type: 'text/markdown;charset=utf-8' }))
+  const link = document.createElement('a')
+  link.href = url
+  link.download = fileName(asset)
+  link.click()
+  URL.revokeObjectURL(url)
 }
 
-function useRequest<T>(url: string | undefined): FolderRequest<T> {
-  const [state, setState] = useState<RequestState<T> & { error?: string }>({ status: 'pending' })
-  const [nonce, setNonce] = useState(0)
-  useEffect(() => {
-    if (!url) return
-    let active = true
-    setState({ status: 'pending' })
-    void loadWithReason<T>(url).then((next) => { if (active) setState(next) })
-    return () => { active = false }
-  }, [url, nonce])
-  return { ...state, reload: () => setNonce((value) => value + 1) } as FolderRequest<T>
-}
-
-function FileViewer({ agent, path }: { agent: string; path: string }) {
-  const file = useRequest<FolderFile>(folderUrl(agent, 'file', path))
-  if (file.status === 'pending') return <LoadingState message={`Opening ${path}...`}/>
-  if (file.status === 'failed') return <EmptyState title="Cannot open file">{file.error ?? 'The file could not be read.'}</EmptyState>
-  const data = file.data
-  return <section className="file-viewer" aria-label={`Contents of ${data.path}`}>
-    <header className="file-head"><div><p className="eyebrow">FILE</p><h2>{data.path.split('/').pop()}</h2></div><dl><div><dt>Size</dt><dd>{formatBytes(data.size)}</dd></div><div><dt>Modified</dt><dd>{formatDateTime(data.modified)}</dd></div></dl></header>
-    {data.kind === 'sensitive' ? <div className="file-notice locked">🔒 This file can hold credentials (keys, tokens, auth or database state). Ruang lists it but never reads its contents.</div>
-      : data.kind === 'binary' ? <div className="file-notice">Binary file. No text preview.</div>
-        : <>
-          {data.truncated && <div className="file-notice">Showing the first 256 KB of this file.</div>}
-          {!!data.redactions && <div className="file-notice">{data.redactions} line{data.redactions === 1 ? '' : 's'} had secrets masked as [redacted].</div>}
-          <pre className="file-content" tabIndex={0}>{data.content || <span className="muted">(empty file)</span>}</pre>
-        </>}
-  </section>
-}
-
-function Browser({ agent, onBack }: { agent: FolderAgent; onBack?: () => void }) {
-  const [directory, setDirectory] = useState('')
-  const [selected, setSelected] = useState<string | undefined>()
-  const [query, setQuery] = useState('')
-  const listing = useRequest<FolderListing>(folderUrl(agent.profile, 'list', directory))
-  const parts = directory ? directory.split('/') : []
-  const open = (next: string) => { setDirectory(next); setSelected(undefined); setQuery('') }
-  const needle = query.trim().toLowerCase()
-  const entries = listing.status === 'ready' ? listing.data.entries.filter((entry) => !needle || entry.name.toLowerCase().includes(needle)) : []
-  return <>
-    <nav className="breadcrumb" aria-label="Folder path">
-      {onBack && <><button type="button" onClick={onBack}>All agents</button><span>/</span></>}
-      <button type="button" onClick={() => open('')} aria-current={!directory ? 'page' : undefined} title={agent.path}>{agent.label} <small>{agent.path}</small></button>
-      {parts.map((part, index) => <span key={index} className="crumb"><span>/</span><button type="button" onClick={() => open(parts.slice(0, index + 1).join('/'))} aria-current={index === parts.length - 1 ? 'page' : undefined}>{part}</button></span>)}
-      <button type="button" className="refresh-button crumb-refresh" onClick={listing.reload}>↻ REFRESH</button>
-    </nav>
-    <section className="folder-browser">
-      <div className="file-list-pane">
-        <SearchInput value={query} onChange={setQuery} label="Filter this folder"/>
-        {listing.status === 'pending' ? <p className="muted">Loading folder...</p> : listing.status === 'failed' ? <div className="file-notice locked" role="alert"><strong>This folder could not be read.</strong><br/>{listing.error}</div> : <>
-          <ul className="file-list" aria-label="Folder contents">
-            {directory && <li><button type="button" className="file-row" onClick={() => open(parts.slice(0, -1).join('/'))}><span className="file-icon">↰</span><span className="file-name">..</span></button></li>}
-            {entries.map((entry) => <li key={entry.path}><button type="button" className={`file-row${selected === entry.path ? ' active' : ''}`} aria-current={selected === entry.path ? 'true' : undefined} onClick={() => entry.type === 'dir' ? open(entry.path) : setSelected(entry.path)}>
-              <span className="file-icon" aria-hidden="true">{entry.unreadable ? '⛔' : entry.type === 'dir' ? '📁' : entry.sensitive ? '🔒' : '📄'}</span>
-              <span className="file-name">{entry.name}</span>
-              <span className="file-size">{entry.unreadable ? 'no access' : entry.type === 'dir' ? '' : formatBytes(entry.size)}</span>
-            </button></li>)}
-          </ul>
-          {entries.length === 0 && <p className="muted">{needle ? 'No matching files.' : 'This folder is empty.'}</p>}
-          {listing.data.truncated && <p className="muted">Showing the first 500 entries.</p>}
-          {listing.data.hiddenCount > 0 && <p className="muted small-note">{listing.data.hiddenCount} system folder{listing.data.hiddenCount === 1 ? '' : 's'} hidden (other profiles, install, caches).</p>}
-        </>}
-      </div>
-      <div className="file-view-pane">{selected ? <FileViewer agent={agent.profile} path={selected}/> : <EmptyState title="Select a file">Pick a file on the left to view it. Folders open in place.</EmptyState>}</div>
-    </section>
-  </>
-}
-
-/** One agent's folder browser, for the Office agent dialog. */
-export function AgentFolder({ profile }: { profile: string }) {
-  const snapshot = usePolling<FolderAgentsSnapshot>('/api/folders', 60_000)
-  const agent = snapshot.status === 'ready' ? snapshot.data.agents.find((item) => item.profile === profile) : undefined
-  if (snapshot.status === 'pending') return <LoadingState message="Finding the agent folder..."/>
-  if (snapshot.status === 'failed') return <EmptyState title="Not Available">{snapshot.message ?? 'The folder list could not be read.'}</EmptyState>
-  if (!agent || !agent.available) return <EmptyState title="Folder not available">{agent?.reason ?? 'This agent has no readable folder.'}</EmptyState>
-  return <div className="embedded-folder"><PrivateGate agent={agent.profile} compact>{agent.warning && <p className="file-notice">⚠ {agent.warning}</p>}<Browser key={agent.profile} agent={agent}/></PrivateGate></div>
-}
-
+/** A file browser for the results agents saved: brands on the left, files in the middle, a preview on the right. */
 export function Folders() {
-  const snapshot = usePolling<FolderAgentsSnapshot>('/api/folders', 60_000)
-  const [openAgent, setOpenAgent] = useState<string | undefined>()
-  const lock = useProfileLock()
-  const data = snapshot.status === 'ready' ? snapshot.data : undefined
-  const agent = data?.agents.find((item) => item.profile === openAgent)
-  const source = data ? { availability: 'available' as const, data: null } : undefined
-  return <><PageTitle eyebrow="WORKSPACE & ASSETS" title="Workspace Folders">Folder proyek lokal yang terhubung ke setiap agen Claude: jelajahi struktur file, source code, aset kreatif, dan dokumen referensi secara langsung.</PageTitle>
-    {!agent && <SourceStatus source={source} fetchedAt={data?.fetchedAt} request={snapshot}/>}
-    <Unavailable source={source} request={snapshot}/>
-    {snapshot.status === 'pending' ? <LoadingState message="Finding agent folders..."/> : agent ? <><PrivateGate agent={agent.profile}><Browser key={agent.profile} agent={agent} onBack={() => setOpenAgent(undefined)}/></PrivateGate>{agentPrivacy(lock, agent.profile) === 'locked' && <button type="button" className="refresh-button" onClick={() => setOpenAgent(undefined)}>← ALL AGENTS</button>}</> : data && <section className="folder-agents">{data.agents.map((item) => <button type="button" key={item.profile} className="folder-agent" disabled={!item.available} onClick={() => setOpenAgent(item.profile)}>
-      <span className="folder-glyph" aria-hidden="true"><PixelCharacter agent={item.profile}/></span>
-      <span className="folder-meta"><strong>{agentPrivacy(lock, item.profile) === 'locked' && '🔒 '}{item.label}</strong><code className="folder-path">{item.path}</code><small>{item.available ? 'Open folder →' : item.reason ?? 'Folder not available'}</small>{item.warning && <small className="text-bad">⚠ {item.warning}</small>}</span>
-    </button>)}</section>}
+  const data = usePolling<OfficeAssets>('/api/office/assets', 30_000)
+  const [brandId, setBrandId] = useState('all')
+  const [query, setQuery] = useState('')
+  const [selected, setSelected] = useState<AssetItem>()
+  const [preview, setPreview] = useState<Preview>()
+  const [copied, setCopied] = useState(false)
+  if (data.status === 'pending') return <><PageTitle eyebrow="FOLDERS" title="Folders"/><LoadingState message="Memuat hasil kerja..."/></>
+  if (data.status === 'failed') return <><PageTitle eyebrow="FOLDERS" title="Folders"/><EmptyState title="Tidak tersedia">Hasil kerja belum dapat dimuat. {data.message}</EmptyState></>
+
+  const { assets, drive } = data.data
+  const brands = [...new Map(assets.map((asset) => [asset.brandId, asset.brandName])).entries()].sort(([a], [b]) => FLOOR_ORDER.indexOf(a) - FLOOR_ORDER.indexOf(b))
+  const latest = new Map<string, number>()
+  for (const asset of assets) latest.set(asset.taskId, Math.max(latest.get(asset.taskId) ?? 0, asset.version))
+  const needle = query.trim().toLowerCase()
+  const files = assets.filter((asset) => (brandId === 'all' || asset.brandId === brandId)
+    && (!needle || `${asset.title} ${asset.kind} ${AGENT_NAMES[asset.agentType] ?? asset.agentType} ${asset.brandName}`.toLowerCase().includes(needle)))
+
+  const open = async (asset: AssetItem) => {
+    setSelected(asset)
+    setCopied(false)
+    setPreview({ id: asset.id })
+    try {
+      const full = await officeRequest<{ content: string }>('GET', `/brands/${asset.brandId}/assets/${asset.id}`)
+      setPreview((current) => current?.id === asset.id ? { id: asset.id, content: full.content } : current)
+    } catch (failure) {
+      setPreview((current) => current?.id === asset.id ? { id: asset.id, error: failure instanceof Error ? failure.message : String(failure) } : current)
+    }
+  }
+  const copy = async (content: string) => {
+    try { await navigator.clipboard.writeText(content); setCopied(true) } catch { setCopied(false) }
+  }
+
+  return <>
+    <PageTitle eyebrow="FOLDERS" title="Folders">Hasil kerja agent per brand, tersimpan sebagai versi berurutan. Mockup: Google Drive belum disambungkan{drive ? ` (mode ${drive.mode})` : ''}.</PageTitle>
+    {assets.length === 0 ? <EmptyState title="Belum ada hasil">Hasil muncul setelah agent menyelesaikan tugas.</EmptyState> : <div className="fb">
+      <nav className="fb-brands" aria-label="Brand">
+        <button type="button" aria-pressed={brandId === 'all'} onClick={() => setBrandId('all')}><span>Semua brand</span><b>{assets.length}</b></button>
+        {brands.map(([id, name]) => <button type="button" key={id} aria-pressed={brandId === id} onClick={() => setBrandId(id)}><span>{name}</span><b>{assets.filter((asset) => asset.brandId === id).length}</b></button>)}
+      </nav>
+      <section className="fb-files" aria-label="Berkas">
+        <div className="fb-toolbar"><SearchInput value={query} onChange={setQuery} label="Cari berkas"/><span className="fb-count">{files.length} berkas</span></div>
+        {files.length === 0 ? <p className="fb-empty">Tidak ada berkas yang cocok.</p> : <div className="fb-scroll"><table className="fb-table">
+          <caption className="fb-sr">Hasil kerja agent, terbaru di atas</caption>
+          <thead><tr><th scope="col">Nama</th><th scope="col">Versi</th><th scope="col" className="fb-hide">Jenis</th><th scope="col" className="fb-hide">Ukuran</th><th scope="col">Diubah</th></tr></thead>
+          <tbody>{files.map((asset) => <tr key={asset.id} className={selected?.id === asset.id ? 'selected' : undefined}>
+            <th scope="row"><button type="button" className="fb-name" aria-pressed={selected?.id === asset.id} onClick={() => void open(asset)}>
+              {asset.title}<small>{brandId === 'all' ? `${asset.brandName} · ` : ''}{AGENT_NAMES[asset.agentType] ?? asset.agentType}</small>
+            </button></th>
+            <td><span className={`fb-version${latest.get(asset.taskId) === asset.version ? ' latest' : ''}`} title={latest.get(asset.taskId) === asset.version ? 'Versi terbaru' : 'Versi lama'}>v{asset.version}</span></td>
+            <td className="fb-hide">{asset.kind}</td>
+            <td className="fb-hide">{sizeLabel(asset.size)}</td>
+            <td>{formatDateTime(asset.createdAt)}</td>
+          </tr>)}</tbody>
+        </table></div>}
+      </section>
+      <aside className="fb-preview" aria-label="Pratinjau" aria-live="polite">
+        {!selected ? <p className="fb-empty">Pilih berkas untuk melihat isinya.</p> : <>
+          <h2>{selected.title}</h2>
+          <dl className="fb-meta">
+            <div><dt>Brand</dt><dd>{selected.brandName}</dd></div>
+            <div><dt>Agent</dt><dd>{AGENT_NAMES[selected.agentType] ?? selected.agentType}</dd></div>
+            <div><dt>Versi</dt><dd>v{selected.version} · {selected.kind}</dd></div>
+            <div><dt>Ukuran</dt><dd>{sizeLabel(selected.size)}</dd></div>
+          </dl>
+          <div className="fb-actions">
+            <button type="button" className="refresh-button" disabled={preview?.content === undefined} onClick={() => preview?.content !== undefined && download(selected, preview.content)}>Unduh .md</button>
+            <button type="button" className="refresh-button" disabled={preview?.content === undefined} onClick={() => preview?.content !== undefined && void copy(preview.content)}>{copied ? 'Tersalin' : 'Salin'}</button>
+          </div>
+          {preview?.error ? <p className="form-error" role="alert">{preview.error}</p> : preview?.content === undefined ? <p className="muted">Memuat isi…</p> : <pre className="fb-content">{preview.content}</pre>}
+        </>}
+      </aside>
+    </div>}
   </>
 }
