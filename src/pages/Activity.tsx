@@ -8,6 +8,8 @@ const ACTION_TEXT: Record<string, string> = {
   'task.create': 'Tugas dibuat',
   'approval.approved': 'Approval disetujui',
   'approval.rejected': 'Approval ditolak, diminta revisi',
+  'kill-switch.pause': 'Kill switch: dijeda',
+  'kill-switch.resume': 'Kill switch: dilanjutkan',
 }
 
 function actorText(actor: string): string {

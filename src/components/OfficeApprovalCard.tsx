@@ -31,6 +31,7 @@ export function ApprovalCard({ approval, onDecided }: { approval: OfficeApproval
       </div>
       <span className="badge unknown">Approver: {approval.approver}</span>
     </div>
+    {approval.usage && <p className="small-note">Biaya AI: {approval.usage.source === 'codex' ? 'Codex, langganan ChatGPT Plus (tanpa biaya per token)' : `Claude via LiteLLM (${approval.usage.model})`} · {approval.usage.runs} run · {(approval.usage.inputTokens + approval.usage.outputTokens).toLocaleString('id-ID')} token ({approval.usage.inputTokens.toLocaleString('id-ID')} masuk, {approval.usage.outputTokens.toLocaleString('id-ID')} keluar){approval.usage.durationMs !== null ? ` · ${(approval.usage.durationMs / 1000).toFixed(1)} dtk` : ''}</p>}
     {approval.qc && <details className="office-qc"><summary>QC teks · {approval.qc.checks.filter(c=>c.status==='warning').length} peringatan · pemeriksaan manusia tetap diperlukan</summary><p>Hanya penyaringan teks otomatis. Fakta, izin, visual, dan tautan belum diverifikasi.</p><ul>{approval.qc.checks.map((check,i)=><li key={i}><strong>{check.status==='manual' ? 'Periksa manual' : check.status==='warning' ? 'Peringatan' : 'Cek teks lolos'}: {check.label}</strong><small>{check.note}</small></li>)}</ul></details>}
     <div className="office-result">{task?.result ?? '(hasil tidak tersedia)'}</div>
     <label className="office-field">

@@ -56,6 +56,8 @@ export interface ActivityEntry {
   objectType?: string; from?: TaskStatus; to?: TaskStatus; reason?: string | null
 }
 
+export interface TaskUsage { runs: number; inputTokens: number; outputTokens: number; durationMs: number | null; source: 'codex' | 'litellm'; model: string }
+
 export interface UsageRow { runs: number; inputTokens: number; outputTokens: number; costUsd: number; tokens: number }
 export interface OfficeUsage {
   totals: UsageRow
@@ -144,7 +146,7 @@ export class OfficeStore {
   async activity(brandId: string, limit = 60): Promise<ActivityEntry[]> {
     const [audit, status] = await Promise.all([
       this.db.query(
-        `SELECT a.created_at, a.actor, a.action, a.object_type AS "objectType",
+        `SELECT a.created_at, a.actor, a.action, a.object_type AS "objectType", a.object_id AS "objectId",
                 coalesce((SELECT t.title FROM tasks t WHERE t.brand_id = a.brand_id AND t.id::text = a.object_id),
                          (SELECT t.title FROM approvals p JOIN tasks t ON t.id = p.task_id WHERE p.brand_id = a.brand_id AND p.id::text = a.object_id)) AS title
            FROM audit_log a WHERE a.brand_id = $1 ORDER BY a.id DESC LIMIT $2`, [brandId, limit]),
@@ -152,7 +154,7 @@ export class OfficeStore {
         `SELECT e.created_at, e.payload, t.title FROM task_events e JOIN tasks t ON t.id = e.task_id AND t.brand_id = e.brand_id
           WHERE e.brand_id = $1 AND e.type = 'status' ORDER BY e.id DESC LIMIT $2`, [brandId, limit]),
     ])
-    const audited = audit.rows.map((row): ActivityEntry => ({ at: iso(row.created_at)!, brandId, kind: 'audit', actor: row.actor, action: row.action, title: row.title ?? null, objectType: row.objectType }))
+    const audited = audit.rows.map((row): ActivityEntry => ({ at: iso(row.created_at)!, brandId, kind: 'audit', actor: row.actor, action: row.action, title: row.title ?? (row.objectType === 'brand' || row.objectType === 'agent' ? row.objectId : null), objectType: row.objectType }))
     // A decision is written as an audit entry and a status change in one transaction; show it once.
     const decided = new Set(audited.map((entry) => `${entry.at}|${entry.title}`))
     const entries: ActivityEntry[] = [
@@ -178,6 +180,26 @@ export class OfficeStore {
       brandId: row.brand_id, agentType: row.agent_type, active: row.active, paused: row.paused,
       status: agentStatus(row.statuses, row.paused), currentTask: row.current_task ?? null, retryAt: iso(row.retry_at),
     }))
+  }
+
+  /**
+   * Kill switch (FR-26): pause or resume a whole brand (no agentType) or one agent. Pausing parks the
+   * brand's or agent's queued, waiting_quota and revision tasks; a run already in flight is parked by the
+   * runner when it returns. Resuming puts the parked tasks back to queued. Returns the tasks it moved.
+   */
+  async setPaused(brandId: string, agentType: string | undefined, paused: boolean, actor: string): Promise<Task[]> {
+    return transaction(this.db, async (tx) => {
+      const flag = agentType
+        ? await tx.query('UPDATE agents SET paused = $3 WHERE brand_id = $1 AND agent_type = $2 RETURNING agent_type', [brandId, agentType, paused])
+        : await tx.query('UPDATE brands SET paused = $2 WHERE id = $1 RETURNING id', [brandId, paused])
+      if (flag.rowCount === 0) throw new Error(agentType ? `Agent ${agentType} tidak ada di brand ${brandId}.` : `Brand ${brandId} tidak ada.`)
+      await audit(tx, { actor, action: paused ? 'kill-switch.pause' : 'kill-switch.resume', objectType: agentType ? 'agent' : 'brand', objectId: agentType ? `${brandId}/${agentType}` : brandId, brandId })
+      const from = paused ? ['queued', 'waiting_quota', 'revision'] : ['paused']
+      const { rows } = await tx.query('SELECT id FROM tasks WHERE brand_id = $1 AND ($2::text IS NULL OR agent_type = $2) AND status = ANY($3::text[]) ORDER BY created_at', [brandId, agentType ?? null, from])
+      const moved: Task[] = []
+      for (const row of rows) moved.push(await this.transition(brandId, row.id as string, paused ? 'paused' : 'queued', { actor, reason: paused ? 'kill switch aktif' : 'kill switch dilepas', ...(paused ? {} : { patch: { attempts: 0, retry_at: null } }) }, tx))
+      return moved
+    })
   }
 
   async isPaused(brandId: string, agentType: string): Promise<boolean> {
@@ -258,7 +280,7 @@ export class OfficeStore {
    * Stores a finished run: the output becomes the next asset version, the task waits for the
    * approval its kind needs, and the run's token use is recorded.
    */
-  async submitForApproval(brandId: string, taskId: string, output: { content: string; runId: string; source: 'codex' | 'litellm'; model: string; inputTokens: number; outputTokens: number }): Promise<{ task: Task; approval: Approval }> {
+  async submitForApproval(brandId: string, taskId: string, output: { content: string; runId: string; source: 'codex' | 'litellm'; model: string; inputTokens: number; outputTokens: number; durationMs?: number }): Promise<{ task: Task; approval: Approval }> {
     const result = await transaction(this.db, async (tx) => {
       const current = await this.task(brandId, taskId, tx)
       if (!current) throw new Error(`Tugas ${taskId} tidak ditemukan di brand ${brandId}.`)
@@ -269,8 +291,8 @@ export class OfficeStore {
         const checklist=dir ? agentContextFiles(dir,current.agentType,brandId)?.find(file=>file.path.endsWith('checklist-publikasi.md'))?.content ?? '' : ''
         await this.logEvent(tx,current,'content_qc',{version,report:screenContent(output.content,checklist)})
       }
-      await tx.query('INSERT INTO cost_events (task_id, brand_id, source, model, input_tokens, output_tokens) VALUES ($1, $2, $3, $4, $5, $6)',
-        [taskId, brandId, output.source, output.model, output.inputTokens, output.outputTokens])
+      await tx.query('INSERT INTO cost_events (task_id, brand_id, source, model, input_tokens, output_tokens, duration_ms) VALUES ($1, $2, $3, $4, $5, $6, $7)',
+        [taskId, brandId, output.source, output.model, output.inputTokens, output.outputTokens, output.durationMs ?? null])
       const task = await this.transition(brandId, taskId, 'waiting_approval', { actor: `agent:${current.agentType}`, reason: `hasil v${version}`, patch: { result: output.content, error: null, run_id: output.runId } }, tx)
       const { rows } = await tx.query('INSERT INTO approvals (task_id, brand_id, approval_type) VALUES ($1, $2, $3) RETURNING *', [taskId, brandId, approvalTypeFor(current.kind)])
       return { task, approval: toApproval(rows[0]) }
@@ -290,8 +312,8 @@ export class OfficeStore {
       if (current.kind !== 'konten.chat') throw new Error(`Tugas ${taskId} bukan balasan chat; gunakan submitForApproval.`)
       const version = (await tx.query('SELECT coalesce(max(version), 0) + 1 AS next FROM assets WHERE task_id = $1', [taskId])).rows[0].next as number
       await tx.query('INSERT INTO assets (task_id, brand_id, kind, version, content) VALUES ($1, $2, $3, $4, $5)', [taskId, brandId, current.kind, version, output.content])
-      await tx.query('INSERT INTO cost_events (task_id, brand_id, source, model, input_tokens, output_tokens) VALUES ($1, $2, $3, $4, $5, $6)',
-        [taskId, brandId, output.source, output.model, output.inputTokens, output.outputTokens])
+      await tx.query('INSERT INTO cost_events (task_id, brand_id, source, model, input_tokens, output_tokens, duration_ms) VALUES ($1, $2, $3, $4, $5, $6, $7)',
+        [taskId, brandId, output.source, output.model, output.inputTokens, output.outputTokens, output.durationMs ?? null])
       return this.transition(brandId, taskId, 'done', { actor: `agent:${current.agentType}`, reason: `balasan chat v${version}`, patch: { result: output.content, error: null, run_id: output.runId } }, tx)
     })
   }
@@ -299,6 +321,16 @@ export class OfficeStore {
   async latestContentQc(brandId:string,taskId:string):Promise<ContentQc | undefined> {
     const {rows}=await this.db.query("SELECT payload FROM task_events WHERE brand_id=$1 AND task_id=$2 AND type='content_qc' ORDER BY id DESC LIMIT 1",[brandId,taskId])
     return rows[0]?.payload.report as ContentQc | undefined
+  }
+
+  /** What the model runs of each task cost: runs, tokens, time and the latest model, for the Approval box (FR-20). */
+  async taskUsage(brandId: string, taskIds: string[]): Promise<Map<string, TaskUsage>> {
+    if (taskIds.length === 0) return new Map()
+    const { rows } = await this.db.query(
+      `SELECT task_id, count(*)::int AS runs, coalesce(sum(input_tokens), 0)::int AS "inputTokens", coalesce(sum(output_tokens), 0)::int AS "outputTokens",
+              sum(duration_ms)::int AS "durationMs", (array_agg(source ORDER BY id DESC))[1] AS source, (array_agg(model ORDER BY id DESC))[1] AS model
+         FROM cost_events WHERE brand_id = $1 AND task_id = ANY($2::uuid[]) GROUP BY task_id`, [brandId, taskIds])
+    return new Map(rows.map((row) => [row.task_id as string, { runs: row.runs, inputTokens: row.inputTokens, outputTokens: row.outputTokens, durationMs: row.durationMs ?? null, source: row.source, model: row.model }]))
   }
 
   async approvals(brandId: string, filter: { open?: boolean; taskId?: string } = {}): Promise<Approval[]> {

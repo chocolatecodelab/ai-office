@@ -17,7 +17,10 @@ export interface OfficeBrand { id: string; name: string; color: string; paused: 
 
 export interface ContentQc { scope:'text-only'; checks:Array<{label:string;status:'pass'|'warning'|'manual';note:string}> }
 
+export interface TaskUsageView { runs: number; inputTokens: number; outputTokens: number; durationMs: number | null; source: 'codex' | 'litellm'; model: string }
+
 export interface OfficeApproval {
+  usage?: TaskUsageView | null
   qc?: ContentQc
   id: string; taskId: string; brandId: string; approvalType: string; approver: string
   decision: 'approved' | 'rejected' | null; note: string | null; createdAt: string; task: OfficeTask | undefined

@@ -152,6 +152,58 @@ describe.skipIf(!available)('office store, runner and event workflow (Postgres)'
     await expect(store.decide('infojerman', approval.id, { decision: 'approved', actor: 'uji' })).rejects.toThrow(/tidak ditemukan/)
     expect(await store.tasks('infojerman')).toEqual([])
   })
+
+  it('parks and restores work with the kill switch, per agent and per brand (FR-26)', async () => {
+    const make = (brand: string, agentType: string, title: string) => store.createTask(brand, { agentType, kind: 'konten.chat', title, brief: 'x', createdBy: 'uji' })
+    const creator = await make('otca', 'content-creator', 'ks-1')
+    const specialist = await make('otca', 'event-specialist', 'ks-2')
+    const sister = await make('infojerman', 'content-creator', 'ks-3')
+
+    expect((await store.setPaused('otca', 'content-creator', true, 'uji')).map((task) => task.id)).toContain(creator.id)
+    expect((await store.task('otca', creator.id))?.status).toBe('paused')
+    expect((await store.task('otca', specialist.id))?.status).toBe('queued')
+    expect(await store.isPaused('otca', 'content-creator')).toBe(true)
+    expect(await store.isPaused('otca', 'event-specialist')).toBe(false)
+    const idle = scriptedHermes([])
+    await runTask(deps(idle), 'otca', creator.id)
+    expect(idle.requests).toHaveLength(0)
+
+    await store.setPaused('infojerman', undefined, true, 'uji')
+    expect((await store.task('infojerman', sister.id))?.status).toBe('paused')
+    expect(await store.isPaused('infojerman', 'manager')).toBe(true)
+    expect(await store.isPaused('otca', 'manager')).toBe(false)
+
+    await store.setPaused('infojerman', undefined, false, 'uji')
+    await store.setPaused('otca', 'content-creator', false, 'uji')
+    expect((await store.task('infojerman', sister.id))).toMatchObject({ status: 'queued', attempts: 0 })
+    expect((await store.task('otca', creator.id))?.status).toBe('queued')
+    await expect(store.setPaused('otca', 'tidak-ada', true, 'uji')).rejects.toThrow(/tidak ada/)
+  })
+
+  it('records the duration of each run and reports a task\'s usage to its own brand only (FR-14, FR-20)', async () => {
+    const task = await store.createTask('otca', { agentType: 'manager', kind: 'konten.chat', title: 'us-1', brief: 'x', createdBy: 'uji' })
+    await runTask(deps(scriptedHermes([{ output: 'jawaban' }])), 'otca', task.id)
+    const usage = (await store.taskUsage('otca', [task.id])).get(task.id)
+    expect(usage).toMatchObject({ runs: 1, inputTokens: 10, outputTokens: 5, source: 'codex' })
+    expect(typeof usage?.durationMs).toBe('number')
+    expect((await store.taskUsage('infojerman', [task.id])).size).toBe(0)
+    expect((await store.taskUsage('otca', [])).size).toBe(0)
+  })
+
+  it('parks a run that returns after the kill switch was pulled, without filing its result', async () => {
+    const task = await store.createTask('otca', { agentType: 'manager', kind: 'konten.chat', title: 'ks-4', brief: 'x', createdBy: 'uji' })
+    const hermes: HermesClient = {
+      async run() {
+        await store.setPaused('otca', 'manager', true, 'uji')
+        return { runId: 'r', status: 'completed', output: 'jawaban', model: 'm', inputTokens: 1, outputTokens: 1 }
+      },
+    }
+    await runTask(deps(hermes), 'otca', task.id)
+    expect((await store.task('otca', task.id))?.status).toBe('paused')
+    expect(await store.assets('otca', task.id)).toEqual([])
+    await store.setPaused('otca', 'manager', false, 'uji')
+    expect((await store.task('otca', task.id))?.status).toBe('queued')
+  })
 })
 
 describe('model routing and question parsing', () => {

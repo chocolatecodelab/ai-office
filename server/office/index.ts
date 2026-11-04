@@ -227,10 +227,25 @@ export function officeRouter(services: Promise<OfficeServices>): Router {
     return task
   }))
 
+  // Kill switch (FR-26): one call pauses or resumes a whole brand or one agent. Resuming queues the parked tasks again.
+  const killSwitch = async (office: OfficeServices, brand: string, agent: string | undefined, request: Request) => {
+    const paused = body(request).paused
+    if (typeof paused !== 'boolean') throw new Error('Isi "paused" dengan true atau false.')
+    const moved = await office.store.setPaused(brand, agent, paused, LOCAL_ACTOR)
+    if (!paused) for (const task of moved) await office.queue.enqueue(task)
+    return { paused, moved: moved.length }
+  }
+  router.post('/brands/:brand/pause', handle(async (office, request) => killSwitch(office, await brandOf(office, request), undefined, request)))
+  router.post('/brands/:brand/agents/:agent/pause', handle(async (office, request) => {
+    const { brand, agent } = await agentOf(office, request)
+    return killSwitch(office, brand, agent, request)
+  }))
+
   router.get('/brands/:brand/approvals', handle(async (office, request) => {
     const brandId = await brandOf(office, request)
     const approvals = await office.store.approvals(brandId, { open: request.query.open === '1' })
-    return Promise.all(approvals.map(async (approval) => ({ ...approval, approver: APPROVERS[approval.approvalType], qc: approval.decision===null ? await office.store.latestContentQc(brandId,approval.taskId) : undefined, task: await office.store.task(brandId, approval.taskId) })))
+    const usage = await office.store.taskUsage(brandId, [...new Set(approvals.map((approval) => approval.taskId))])
+    return Promise.all(approvals.map(async (approval) => ({ ...approval, approver: APPROVERS[approval.approvalType], usage: usage.get(approval.taskId) ?? null, qc: approval.decision===null ? await office.store.latestContentQc(brandId,approval.taskId) : undefined, task: await office.store.task(brandId, approval.taskId) })))
   }))
 
   router.post('/brands/:brand/approvals/:id', handle(async (office, request) => {

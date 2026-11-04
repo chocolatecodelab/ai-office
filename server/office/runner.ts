@@ -68,12 +68,19 @@ export async function runTask(deps: RunnerDeps, brandId: string, taskId: string)
       const history = (await store.tasks(brandId)).filter(item => item.agentType === task.agentType && item.kind === 'konten.chat' && item.id !== task.id && item.createdAt < task.createdAt && item.result).slice(0,10).reverse()
       input = `Percakapan dengan pengguna. Jawab pesan terbaru sesuai peran; boleh meminta klarifikasi. Hasil belum merupakan izin publikasi atau aksi eksternal.\n\n${history.map(item => `Pengguna: ${item.brief.slice(0,6000)}\nAgent: ${item.result!.slice(0,10000)}`).join('\n\n')}\n\nPesan terbaru: ${input}`
     }
+    const runStarted = Date.now()
     const result = await deps.hermes.run(endpoint, {
       input, instructions, sessionId: `task-${taskId}`,
       model: route.model, provider: route.provider, reasoningEffort: route.reasoningEffort,
     }, `${taskId}:${attempt}:${running.updatedAt}`)
+    const durationMs = Date.now() - runStarted
+    // The kill switch may have been pulled while the run was in flight; park the task instead of filing its result.
+    if (await store.isPaused(brandId, task.agentType)) {
+      await store.transition(brandId, taskId, 'paused', { actor: 'sistem', reason: 'kill switch aktif saat tugas berjalan' })
+      return { next: 'none' }
+    }
     if (result.status === 'completed' && result.output.trim()) {
-      const output = { content: result.output.trim(), runId: result.runId, source: route.source, model: route.model ?? result.model, inputTokens: result.inputTokens, outputTokens: result.outputTokens }
+      const output = { content: result.output.trim(), runId: result.runId, source: route.source, model: route.model ?? result.model, inputTokens: result.inputTokens, outputTokens: result.outputTokens, durationMs }
       if (task.kind === 'konten.chat') await store.completeChat(brandId, taskId, output)
       else await store.submitForApproval(brandId, taskId, output)
       return { next: 'none' }
