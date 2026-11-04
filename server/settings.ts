@@ -29,6 +29,8 @@ export interface OfficeSettings {
   redisUrl: string
   hermes(brand: string): HermesEndpoint | undefined
   langfuse?: LangfuseConfig
+  /** Model table for the agents: dev runs everything on Codex, prod adds the Claude pools (server/office/model-routes.ts). */
+  engineProfile: 'dev' | 'prod'
 }
 
 /** Langfuse keys for the usage view: the environment first, then observability.env, then Hermes' copy. */
@@ -51,6 +53,7 @@ export function officeSettings(env: NodeJS.ProcessEnv = process.env, root = REPO
     databaseUrl: env.OFFICE_DATABASE_URL || localDatabase,
     redisUrl: env.OFFICE_REDIS_URL || 'redis://127.0.0.1:16379',
     langfuse: langfuseConfig(env, envDir),
+    engineProfile: env.ENGINE_PROFILE === 'prod' ? 'prod' : 'dev',
     hermes(brand) {
       const name = brand.toUpperCase()
       const key = env[`HERMES_${name}_KEY`] || readEnvFile(join(envDir, `hermes-${brand}.env`)).API_SERVER_KEY

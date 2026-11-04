@@ -11,6 +11,7 @@ import { OfficeBus, type OfficeChange } from './bus.js'
 import { EVENT_STAGES, EventWorkflow } from './event-workflow.js'
 import { parseEventDate } from './event-date.js'
 import { langfuseUsage } from './langfuse-usage.js'
+import { routeFor } from './model-routes.js'
 import { poolStatuses } from './pools.js'
 import { createHermesClient, type HermesClient } from './hermes-client.js'
 import { TaskQueue, redisConnection } from './queue.js'
@@ -66,6 +67,7 @@ export async function startOffice(options: OfficeOptions = {}): Promise<OfficeSe
     endpoint: (brandId) => settings.hermes(brandId),
     contextDir,
     brandName: async (brandId) => brandNames.get(brandId) ?? brandId,
+    profile: settings.engineProfile,
   })
   if (options.startWorker !== false) {
     queue.start()
@@ -125,6 +127,19 @@ export function officeRouter(services: Promise<OfficeServices>): Router {
     const brands = await office.store.brands()
     const lists = await Promise.all(brands.map(async (brand) => (await office.store.activity(brand.id, 40)).map((entry) => ({ ...entry, brandName: brand.name }))))
     return lists.flat().sort((a, b) => b.at.localeCompare(a.at)).slice(0, 150)
+  }))
+
+  // The model each agent uses for simple, complex and urgent work under the active engine profile.
+  router.get('/models', handle(async (office) => {
+    const profile = office.settings?.engineProfile ?? 'dev'
+    const brands = await office.store.brands()
+    const types = [...new Set((await Promise.all(brands.map((brand) => office.store.agents(brand.id)))).flat().map((agent) => agent.agentType))]
+    return { profile, agents: types.map((agentType) => ({
+      agentType,
+      simple: routeFor({ agentType, urgent: false, complex: false }, profile),
+      complex: routeFor({ agentType, urgent: false, complex: true }, profile),
+      urgent: routeFor({ agentType, urgent: true, complex: true }, profile),
+    })) }
   }))
 
   // Events of every brand with their date read from the free text, for the Calendar. Dates that cannot be read are sent without one.

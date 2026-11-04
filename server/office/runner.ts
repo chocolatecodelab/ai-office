@@ -1,8 +1,9 @@
 import type { HermesEndpoint } from '../settings.js'
 import { HermesError, isQuotaFailure, type HermesClient } from './hermes-client.js'
+import { routeFor, type EngineProfile } from './model-routes.js'
 import { agentInstructions, taskInput } from './prompts.js'
 import { RUNNABLE } from './status.js'
-import type { OfficeStore, Task } from './store.js'
+import type { OfficeStore } from './store.js'
 
 // Runs one task on its brand's Hermes and maps the outcome onto the task status machine:
 // done → waiting_approval (a chat reply finishes as done); Codex quota used up → waiting_quota until the reset; other failures are
@@ -23,12 +24,8 @@ export interface RunnerDeps {
   endpoint(brandId: string): HermesEndpoint | undefined
   contextDir: string
   brandName(brandId: string): Promise<string>
-}
-
-/** Codex for normal work; urgent work goes to the Claude pool through LiteLLM (FR-12). */
-export function routeFor(task: Pick<Task, 'urgent' | 'complex'>): { source: 'codex' | 'litellm'; model?: string; provider?: string; reasoningEffort: 'low' | 'high' } {
-  if (task.urgent) return { source: 'litellm', provider: 'litellm', model: task.complex ? 'final' : 'cepat', reasoningEffort: task.complex ? 'high' : 'low' }
-  return { source: 'codex', reasoningEffort: task.complex ? 'high' : 'low' }
+  /** Which model table to use (model-routes.ts); dev runs everything on Codex. */
+  profile?: EngineProfile
 }
 
 export async function runTask(deps: RunnerDeps, brandId: string, taskId: string): Promise<RunOutcome> {
@@ -48,7 +45,7 @@ export async function runTask(deps: RunnerDeps, brandId: string, taskId: string)
 
   const attempt = task.attempts + 1
   const running = await store.transition(brandId, taskId, 'running', { actor: `agent:${task.agentType}`, reason: `percobaan ${attempt}`, patch: { attempts: attempt, started_at: new Date().toISOString(), retry_at: null } })
-  const route = routeFor(task)
+  const route = routeFor(task, deps.profile)
   const fail = async (message: string, quota: boolean): Promise<RunOutcome> => {
     if (quota) {
       const retryAt = new Date(Date.now() + QUOTA_WAIT_MS)

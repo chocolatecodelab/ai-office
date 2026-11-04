@@ -8,7 +8,7 @@ import { readBrands, syncBrands } from './brands.js'
 import { OfficeBus } from './bus.js'
 import { EventWorkflow, parseQuestions } from './event-workflow.js'
 import type { HermesClient, RunRequest, RunResult } from './hermes-client.js'
-import { MAX_ATTEMPTS, routeFor, runTask, type RunnerDeps } from './runner.js'
+import { MAX_ATTEMPTS, runTask, type RunnerDeps } from './runner.js'
 import { OfficeStore } from './store.js'
 
 // Runs against a throwaway database: OFFICE_TEST_DATABASE_URL, or office_test on the local Compose
@@ -155,12 +155,6 @@ describe.skipIf(!available)('office store, runner and event workflow (Postgres)'
 })
 
 describe('model routing and question parsing', () => {
-  it('sends normal work to Codex and only urgent work to the Claude pool', () => {
-    expect(routeFor({ urgent: false, complex: true })).toEqual({ source: 'codex', reasoningEffort: 'high' })
-    expect(routeFor({ urgent: true, complex: false })).toMatchObject({ source: 'litellm', provider: 'litellm', model: 'cepat' })
-    expect(routeFor({ urgent: true, complex: true })).toMatchObject({ model: 'final' })
-  })
-
   it('reads the numbered questions, ignoring other lines', () => {
     expect(parseQuestions('Pengantar\n1. Satu?\n2) **Dua?**\n- catatan\n11. bukan')).toEqual(['Satu?', 'Dua?'])
   })

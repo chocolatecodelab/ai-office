@@ -1,36 +1,49 @@
 import { FLOOR_ORDER } from '../office3d/building.ts'
-import { AGENT_NAMES, AGENT_STATUS_LABELS, type OfficeAgent, type OfficeBrand } from '../office-api.ts'
+import { AGENT_NAMES, AGENT_STATUS_LABELS, type AgentRoute, type OfficeAgent, type OfficeBrand, type OfficeModels } from '../office-api.ts'
 import { usePolling } from '../polling.ts'
 import { EmptyState, LoadingState, PageTitle } from '../ui.tsx'
 import { PixelCharacter } from './OfficeDetails.tsx'
 
-// Every agent runs on its brand's Hermes gateway with Codex (ChatGPT Plus). Urgent tasks can fall
-// back to Claude through LiteLLM, see routeFor in server/office/runner.ts.
-const DEFAULT_MODEL = 'Codex · gpt-6-sol (ChatGPT Plus)'
+const CLAUDE_NAMES = { cepat: 'Haiku 5.5', final: 'Sonnet 5.5', video: 'Opus 5.5' }
 
-/** The agents of every brand, grouped by brand, read from the office API. */
+/** One route as staff read it: Codex with its reasoning level, or a Claude model through LiteLLM. */
+function routeLabel(route: AgentRoute): string {
+  if (route.source === 'codex') return `Codex · gpt-6-sol, reasoning ${route.reasoningEffort === 'high' ? 'tinggi' : 'rendah'}`
+  return `${route.model ? CLAUDE_NAMES[route.model] : 'Claude'} · LiteLLM`
+}
+
+/** The agents of every brand, grouped by brand, with the model each one uses (server/office/model-routes.ts). */
 export function Agents() {
   const brands = usePolling<OfficeBrand[]>('/api/office/brands', 15_000)
+  const models = usePolling<OfficeModels>('/api/office/models', 60_000)
   if (brands.status === 'pending') return <><PageTitle eyebrow="CREW" title="Agents"/><LoadingState message="Memuat agen..."/></>
   if (brands.status === 'failed') return <><PageTitle eyebrow="CREW" title="Agents"/><EmptyState title="Tidak tersedia">Daftar agen belum dapat dimuat dari server.</EmptyState></>
+  const table = models.status === 'ready' ? models.data : undefined
   const brandsByFloor = [...brands.data].sort((a, b) => FLOOR_ORDER.indexOf(a.id) - FLOOR_ORDER.indexOf(b.id))
   const total = brands.data.reduce((sum, brand) => sum + brand.agents.length, 0)
   return <>
-    <PageTitle eyebrow="CREW" title="Agents">{total} agen di {brands.data.length} brand. Setiap agen bekerja lewat Hermes milik brandnya.</PageTitle>
+    <PageTitle eyebrow="CREW" title="Agents">{total} agen di {brands.data.length} brand. Setiap agen bekerja lewat Hermes milik brandnya.{table ? ` Profil mesin: ${table.profile === 'prod' ? 'production (Codex dan pool Claude)' : 'development (semua di Codex)'}.` : ''}</PageTitle>
     {brandsByFloor.map((brand) => <section className="agent-brand" key={brand.id}>
       <h2 style={{ color: brand.color }}>{brand.name}{brand.paused ? ' · dijeda' : ''}</h2>
-      <section className="agent-grid">{brand.agents.map((agent) => <AgentCard agent={agent} key={agent.agentType}/>)}</section>
+      <section className="agent-grid">{brand.agents.map((agent) => <AgentCard agent={agent} models={table} key={agent.agentType}/>)}</section>
     </section>)}
   </>
 }
 
-function AgentCard({ agent }: { agent: OfficeAgent }) {
+function AgentCard({ agent, models }: { agent: OfficeAgent; models: OfficeModels | undefined }) {
+  const routes = models?.agents.find((item) => item.agentType === agent.agentType)
   return <article className="agent-card">
     <span className="folder-glyph" aria-hidden="true"><PixelCharacter agent={agent.agentType}/></span>
     <div className="agent-card-body">
       <h3>{AGENT_NAMES[agent.agentType] ?? agent.agentType}</h3>
       <dl>
-        <div><dt>Model</dt><dd>{DEFAULT_MODEL}</dd></div>
+        {!routes && <div><dt>Model</dt><dd>—</dd></div>}
+        {routes && models?.profile === 'dev' && <div><dt>Model</dt><dd>Codex · gpt-6-sol, reasoning sesuai bobot tugas</dd></div>}
+        {routes && models?.profile === 'prod' && <>
+          <div><dt>Sederhana</dt><dd>{routeLabel(routes.simple)}</dd></div>
+          <div><dt>Kompleks</dt><dd>{routeLabel(routes.complex)}</dd></div>
+          <div><dt>Mendesak</dt><dd>{routeLabel(routes.urgent)}</dd></div>
+        </>}
         <div><dt>Status</dt><dd>{agent.active ? AGENT_STATUS_LABELS[agent.status] : 'Nonaktif'}</dd></div>
         <div><dt>Tugas</dt><dd>{agent.currentTask ?? '—'}</dd></div>
       </dl>

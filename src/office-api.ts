@@ -41,6 +41,9 @@ export interface OfficeSettingsView {
   langfuse: { configured: boolean }
 }
 
+export interface AgentRoute { source: 'codex' | 'litellm'; model?: 'cepat' | 'final' | 'video'; reasoningEffort: 'low' | 'high' }
+export interface OfficeModels { profile: 'dev' | 'prod'; agents: Array<{ agentType: string; simple: AgentRoute; complex: AgentRoute; urgent: AgentRoute }> }
+
 export interface ActivityItem {
   at: string; brandId: string; brandName: string; kind: 'audit' | 'status'; actor: string; action: string; title: string | null
   from?: TaskStatus; to?: TaskStatus; reason?: string | null
