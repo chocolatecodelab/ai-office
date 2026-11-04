@@ -43,5 +43,15 @@ create('litellm', {
   ANTHROPIC_API_KEY: anthropic,
 })
 create('observability', {})
-create('integrations', {})
+create('integrations', { INTEGRATIONS_ENCRYPTION_KEY: randomBytes(32).toString('base64') })
+// An integrations.env made before the encryption key existed: add the key line when it is missing or empty.
+const integrationsFile = join(envDir, 'integrations.env')
+if (existsSync(integrationsFile)) {
+  const text = readFileSync(integrationsFile, 'utf8')
+  if (!/^INTEGRATIONS_ENCRYPTION_KEY=.+/m.test(text)) {
+    const key = `INTEGRATIONS_ENCRYPTION_KEY=${randomBytes(32).toString('base64')}`
+    writeFileSync(integrationsFile, /^INTEGRATIONS_ENCRYPTION_KEY=/m.test(text) ? text.replace(/^INTEGRATIONS_ENCRYPTION_KEY=.*$/m, key) : `${text.trimEnd()}\n${key}\n`, { mode: 0o600 })
+    console.log('- INTEGRATIONS_ENCRYPTION_KEY dibuat di infra/env/integrations.env')
+  }
+}
 if (!anthropic) console.log('! Anthropic API key tidak ditemukan di .env; isi ANTHROPIC_API_KEY di infra/env/litellm.env')

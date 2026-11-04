@@ -14,11 +14,11 @@ export async function profileLockRequest(path: 'setup' | 'update' | 'disable' | 
   try {
     const response = await request(`/api/profile-lock/${path}`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-ruang-request': '1' }, body: JSON.stringify(body), credentials: 'same-origin' })
     const data = await response.json().catch(() => undefined) as (ProfileLockStatus & { error?: string }) | undefined
-    if (!response.ok || !data) return { ok: false, message: data?.error ?? `The Ruang server answered HTTP ${response.status}.` }
+    if (!response.ok || !data) return { ok: false, message: data?.error ?? `The OTCA server answered HTTP ${response.status}.` }
     if (path === 'unlock' || path === 'lock' || path === 'update' || path === 'disable') window.dispatchEvent(new Event(PROFILES_CHANGED))
     return { ok: true, status: data }
   } catch {
-    return { ok: false, message: 'The Ruang server could not be reached.' }
+    return { ok: false, message: 'The OTCA server could not be reached.' }
   }
 }
 

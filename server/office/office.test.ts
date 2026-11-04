@@ -5,6 +5,8 @@ import { fileURLToPath } from 'node:url'
 import pg from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createDb, migrate, type Db } from '../db/index.js'
+import { Connections } from '../integrations/connections.js'
+import { routedDrive } from '../integrations/drive.js'
 import { mockDrive } from '../integrations/index.js'
 import { officeSettings } from '../settings.js'
 import { readBrands, syncBrands } from './brands.js'
@@ -315,6 +317,81 @@ describe.skipIf(!available)('office store, runner and event workflow (Postgres)'
     expect(modes.get('infojerman')?.get('trello')).toBe('mock')
     expect(modes.get('ciaomanda')?.has('trello') ?? false).toBe(false)
     expect((await store.activity('otca', 100)).some((entry) => entry.action === 'integration.mode')).toBe(true)
+  })
+
+  it('connects an account in one click: PKCE and a single-use state, tokens sealed, refresh, revoked access, Drive, disconnect', async () => {
+    const calls: string[] = []
+    let refreshFails = false
+    const google: typeof fetch = async (input, init) => {
+      const url = String(input)
+      const form = init?.body instanceof URLSearchParams ? init.body : undefined
+      calls.push(`${init?.method ?? 'GET'} ${url.split('?')[0]}${form?.get('grant_type') ? ` ${form.get('grant_type')}` : ''}`)
+      if (url.startsWith('https://oauth2.googleapis.com/token')) {
+        if (form?.get('grant_type') === 'refresh_token') return refreshFails ? Response.json({ error: 'invalid_grant' }, { status: 400 }) : Response.json({ access_token: 'at-2', expires_in: 3600 })
+        return form?.get('code_verifier') && form.get('code') === 'kode-ok' ? Response.json({ access_token: 'at-1', refresh_token: 'rt-1', expires_in: 3600, scope: 'openid email drive.readonly' }) : Response.json({ error: 'invalid_grant' }, { status: 400 })
+      }
+      if (url.includes('/userinfo')) return Response.json({ email: 'tim@otca.id' })
+      if (url.includes('/export')) return new Response('Isi template TOR')
+      if (url.includes('/drive/v3/files')) return Response.json({ files: [{ id: 'f1', name: 'TOR & SKB', mimeType: 'application/vnd.google-apps.document' }] })
+      return new Response('{}')
+    }
+    const key = Buffer.alloc(32, 7).toString('base64')
+    const env = { GOOGLE_OAUTH_CLIENT_ID: 'cid', GOOGLE_OAUTH_CLIENT_SECRET: 'sec', INTEGRATIONS_ENCRYPTION_KEY: key }
+    const redirect = 'http://127.0.0.1:3001/api/office/oauth/google/callback'
+
+    await expect(new Connections({ store, env: {}, fetcher: google }).begin('otca', 'drive', redirect, 'uji')).rejects.toMatchObject({ code: 'config' })
+    const connections = new Connections({ store, env, fetcher: google })
+    await expect(connections.begin('otca', 'trello', redirect, 'uji')).rejects.toThrow(/satu klik/)
+
+    const url = new URL(await connections.begin('otca', 'drive', redirect, 'uji'))
+    expect(url.searchParams.get('client_id')).toBe('cid')
+    expect(url.searchParams.get('code_challenge_method')).toBe('S256')
+    expect(url.searchParams.get('scope')).toContain('drive.readonly')
+    expect(url.searchParams.get('scope')).not.toContain('auth/drive ') // read only
+    const state = url.searchParams.get('state')!
+
+    await expect(connections.complete({ code: 'kode-ok', state: 'bukan-state' })).rejects.toMatchObject({ code: 'state' })
+    expect(await connections.complete({ code: 'kode-ok', state })).toEqual({ brandId: 'otca', service: 'drive' })
+    await expect(connections.complete({ code: 'kode-ok', state })).rejects.toMatchObject({ code: 'state' }) // used once
+
+    const listed = await store.connections()
+    expect(listed).toEqual([expect.objectContaining({ brandId: 'otca', service: 'drive', account: 'tim@otca.id', status: 'active' })])
+    const sealed = await store.connectionSecret('otca', 'drive')
+    expect(sealed?.accessToken).not.toContain('at-1')
+    expect(sealed?.refreshToken).not.toContain('rt-1')
+    expect(JSON.stringify(listed)).not.toContain('at-1')
+
+    const denied = new URL(await connections.begin('otca', 'drive', redirect, 'uji')).searchParams.get('state')!
+    await expect(connections.complete({ error: 'access_denied', state: denied })).rejects.toMatchObject({ code: 'denied' })
+
+    expect(await connections.accessToken('otca', 'drive')).toBe('at-1')
+    expect(calls.filter((call) => call.endsWith('refresh_token'))).toHaveLength(0)
+    await db.query("UPDATE integration_connections SET expires_at = now() - interval '1 minute' WHERE brand_id = 'otca'")
+    expect(await connections.accessToken('otca', 'drive')).toBe('at-2')
+    expect(await connections.check('otca', 'drive')).toEqual({ account: 'tim@otca.id', visibleFiles: 1 })
+
+    const drive = routedDrive(store, connections, google)
+    expect(await drive.template('otca', 'TOR & SKB')).toBeUndefined() // mode is still mock
+    await store.setIntegrationMode('otca', 'drive', 'live', 'uji')
+    await drive.refresh()
+    expect(drive.mode).toBe('live')
+    expect(await drive.template('otca', 'TOR & SKB')).toMatchObject({ content: 'Isi template TOR', source: 'Google Drive · TOR & SKB' })
+    await store.setIntegrationMode('infojerman', 'drive', 'live', 'uji')
+    expect(await drive.template('infojerman', 'TOR & SKB')).toBeUndefined() // another brand has no connection
+
+    refreshFails = true
+    await db.query("UPDATE integration_connections SET expires_at = now() - interval '1 minute' WHERE brand_id = 'otca'")
+    await expect(connections.accessToken('otca', 'drive')).rejects.toThrow(/hubungkan ulang/)
+    expect((await store.connections())[0].status).toBe('needs_reauth')
+    await drive.refresh()
+    expect(drive.mode).toBe('mock')
+
+    expect(await connections.disconnect('infojerman', 'drive', 'uji')).toBe(false)
+    expect(await connections.disconnect('otca', 'drive', 'uji')).toBe(true)
+    expect(calls).toContain('POST https://oauth2.googleapis.com/revoke')
+    expect(await store.connections()).toEqual([])
+    const actions = (await store.activity('otca', 100)).filter((entry) => entry.kind === 'audit').map((entry) => entry.action)
+    expect(actions).toEqual(expect.arrayContaining(['integration.connect', 'integration.disconnect']))
   })
 
   it('parks a run that returns after the kill switch was pulled, without filing its result', async () => {

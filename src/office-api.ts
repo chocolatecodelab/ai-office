@@ -38,9 +38,12 @@ export interface IntegrationStatus { service: string; label: string; mode: 'mock
 export type IntegrationMode = 'mock' | 'sandbox' | 'live'
 export interface OfficeIntegrations {
   brands: Array<{ id: string; name: string }>
+  redirectUri?: string
+  encryptionReady: boolean
   services: Array<{
     service: string; label: string; purpose: string; level: string; auth: 'oauth' | 'api-key'; vars: string[]; file: string; howTo: string
-    adapterReady: boolean; connected: boolean; missing: string[]; modes: Record<string, { requested: IntegrationMode; effective: IntegrationMode }>
+    adapterReady: boolean; connected: boolean; missing: string[]; oneClick: boolean; modeOptions: IntegrationMode[]
+    modes: Record<string, { requested: IntegrationMode; effective: IntegrationMode; account?: { email: string; status: 'active' | 'needs_reauth'; connectedAt: string } }>
   }>
 }
 export interface OfficeStatus { integrations: IntegrationStatus[] }

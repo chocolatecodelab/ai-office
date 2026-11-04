@@ -25,7 +25,7 @@ async function loadWithReason<T>(url: string): Promise<RequestState<T> & { error
     if (response.status === 401 && body?.locked === true) window.dispatchEvent(new Event(LOCKED_EVENT))
     return { status: 'failed', error: typeof body?.error === 'string' ? body.error : `Request failed (HTTP ${response.status}).` }
   } catch {
-    return { status: 'failed', error: 'The Ruang API could not be reached.' }
+    return { status: 'failed', error: 'The OTCA API could not be reached.' }
   }
 }
 
@@ -49,7 +49,7 @@ function FileViewer({ agent, path }: { agent: string; path: string }) {
   const data = file.data
   return <section className="file-viewer" aria-label={`Contents of ${data.path}`}>
     <header className="file-head"><div><p className="eyebrow">FILE</p><h2>{data.path.split('/').pop()}</h2></div><dl><div><dt>Size</dt><dd>{formatBytes(data.size)}</dd></div><div><dt>Modified</dt><dd>{formatDateTime(data.modified)}</dd></div></dl></header>
-    {data.kind === 'sensitive' ? <div className="file-notice locked">🔒 This file can hold credentials (keys, tokens, auth or database state). Ruang lists it but never reads its contents.</div>
+    {data.kind === 'sensitive' ? <div className="file-notice locked">🔒 This file can hold credentials (keys, tokens, auth or database state). OTCA lists it but never reads its contents.</div>
       : data.kind === 'binary' ? <div className="file-notice">Binary file. No text preview.</div>
         : <>
           {data.truncated && <div className="file-notice">Showing the first 256 KB of this file.</div>}

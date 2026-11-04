@@ -2,8 +2,11 @@ import type { Server } from 'node:http'
 import express, { type Request, type Response, type Router } from 'express'
 import { WebSocketServer } from 'ws'
 import { createDb, migrate, type Db } from '../db/index.js'
-import { SERVICES, connectionState, effectiveMode, isMode } from '../integrations/catalog.js'
-import { integrationStatuses, mockDrive, type Integrations } from '../integrations/index.js'
+import { SERVICES, connectionState, credentialValue, effectiveMode, isMode } from '../integrations/catalog.js'
+import { encryptionKey } from '../integrations/crypto.js'
+import { Connections, OAuthFailure } from '../integrations/connections.js'
+import { routedDrive } from '../integrations/drive.js'
+import { integrationStatuses, type Integrations } from '../integrations/index.js'
 import { agentContextFiles, findContextDir } from '../otca-context.js'
 import { officeSettings, type OfficeSettings } from '../settings.js'
 import { APPROVERS } from './approval-routes.js'
@@ -50,11 +53,13 @@ export interface OfficeServices {
   queue: TaskQueue
   bus: OfficeBus
   integrations: Integrations
+  connections: Connections
+  drive: ReturnType<typeof routedDrive>
   settings?: OfficeSettings
   hermes?: HermesClient
 }
 
-export interface OfficeOptions { settings?: OfficeSettings; contextDir?: string; hermes?: HermesClient; startWorker?: boolean }
+export interface OfficeOptions { settings?: OfficeSettings; contextDir?: string; hermes?: HermesClient; startWorker?: boolean; fetcher?: typeof fetch }
 
 export async function startOffice(options: OfficeOptions = {}): Promise<OfficeServices> {
   const settings = options.settings ?? officeSettings()
@@ -66,7 +71,10 @@ export async function startOffice(options: OfficeOptions = {}): Promise<OfficeSe
   await syncBrands(db, readBrands(contextDir))
   const bus = new OfficeBus()
   const store = new OfficeStore(db, bus, localFileStore(settings.filesDir))
-  const integrations: Integrations = { drive: mockDrive() }
+  const connections = new Connections({ store, envDir: settings.envDir, fetcher: options.fetcher })
+  const drive = routedDrive(store, connections, options.fetcher)
+  await drive.refresh()
+  const integrations: Integrations = { drive }
   const brandNames = new Map((await store.brands()).map((brand) => [brand.id, brand.name]))
   const hermes = options.hermes ?? createHermesClient()
   const queue = new TaskQueue(redisConnection(settings.redisUrl), {
@@ -82,7 +90,7 @@ export async function startOffice(options: OfficeOptions = {}): Promise<OfficeSe
     const recovered = await queue.recover(store)
     if (recovered) console.log(`Office: ${recovered} tugas dijadwalkan ulang setelah start.`)
   }
-  return { db, store, events: new EventWorkflow(store, bus, integrations.drive), queue, bus, integrations, settings, hermes }
+  return { db, store, events: new EventWorkflow(store, bus, integrations.drive), queue, bus, integrations, connections, drive, settings, hermes }
 }
 
 const message = (error: unknown) => error instanceof Error ? error.message : String(error)
@@ -257,32 +265,89 @@ export function officeRouter(services: Promise<OfficeServices>): Router {
     }
   }))
 
-  // Connection status of every outside service and the mode each brand asked for. Only whether credentials exist is
-  // reported, never their values; they are filled in infra/env/ and re-read on every call (integrations/catalog.ts).
-  router.get('/integrations', handle(async (office) => {
-    const [brands, modes] = await Promise.all([office.store.brands(), office.store.integrationModes()])
+  // Connection status of every outside service and what each brand asked for. Only whether credentials exist and which
+  // account is connected is reported, never a secret; keys are filled in infra/env/ and re-read on every call.
+  const publicBase = (request: Request) => {
+    const configured = process.env.RUANG_PUBLIC_URL?.trim().replace(/\/+$/, '')
+    if (configured) return configured
+    const host = request.get('host') ?? ''
+    if (/^(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/.test(host)) return `${request.protocol}://${host}`
+    throw new Error('Setel RUANG_PUBLIC_URL di infra/env/integrations.env: alamat publik Ruang untuk callback OAuth.')
+  }
+  const CALLBACK = '/api/office/oauth/google/callback'
+  const serviceOf = (name: unknown) => {
+    const def = SERVICES.find((item) => item.service === name)
+    if (!def) throw new Error('Layanan tidak dikenal.')
+    return def
+  }
+  router.get('/integrations', handle(async (office, request) => {
+    const [brands, modes, connected] = await Promise.all([office.store.brands(), office.store.integrationModes(), office.store.connections()])
+    let redirectUri: string | undefined
+    try { redirectUri = `${publicBase(request)}${CALLBACK}` } catch { /* the page shows the hint instead */ }
+    let encryptionReady = true
+    try { encryptionKey(credentialValue(SERVICES[0], 'INTEGRATIONS_ENCRYPTION_KEY', process.env, office.settings?.envDir)) } catch { encryptionReady = false }
     return {
       brands: brands.map((brand) => ({ id: brand.id, name: brand.name })),
+      redirectUri, encryptionReady,
       services: SERVICES.map((def) => {
-        const { connected, missing } = connectionState(def, process.env, office.settings?.envDir)
+        const { connected: appReady, missing } = connectionState(def, process.env, office.settings?.envDir)
         return {
           service: def.service, label: def.label, purpose: def.purpose, level: def.level, auth: def.auth, vars: def.vars, file: def.file, howTo: def.howTo,
-          adapterReady: def.adapterReady, connected, missing,
-          modes: Object.fromEntries(brands.map((brand) => { const requested = modes.get(brand.id)?.get(def.service) ?? 'mock'; return [brand.id, { requested, effective: effectiveMode(requested, connected, def.adapterReady) }] })),
+          adapterReady: def.adapterReady, connected: appReady, missing, oneClick: Boolean(def.oauth), modeOptions: def.modes ?? ['mock', 'sandbox', 'live'],
+          modes: Object.fromEntries(brands.map((brand) => {
+            const requested = modes.get(brand.id)?.get(def.service) ?? 'mock'
+            const account = connected.find((item) => item.brandId === brand.id && item.service === def.service)
+            const ready = def.oauth ? account?.status === 'active' : appReady
+            return [brand.id, { requested, effective: effectiveMode(requested, ready, def.adapterReady), account: account ? { email: account.account, status: account.status, connectedAt: account.connectedAt } : undefined }]
+          })),
         }
       }),
     }
   }))
   router.put('/brands/:brand/integrations/:service', handle(async (office, request) => {
     const brand = await brandOf(office, request)
-    const def = SERVICES.find((item) => item.service === request.params.service)
-    if (!def) throw new Error('Layanan tidak dikenal.')
+    const def = serviceOf(request.params.service)
     const mode = body(request).mode
-    if (!isMode(mode)) throw new Error('Mode harus mock, sandbox, atau live.')
-    if (mode !== 'mock' && !connectionState(def, process.env, office.settings?.envDir).connected) throw new Error(`${def.label} belum terhubung; lengkapi kredensialnya dulu, sampai itu hanya mode mock.`)
+    if (!isMode(mode) || !(def.modes ?? ['mock', 'sandbox', 'live']).includes(mode)) throw new Error(`Mode ${String(mode)} tidak tersedia untuk ${def.label}.`)
+    if (mode !== 'mock') {
+      const account = (await office.store.connections()).find((item) => item.brandId === brand && item.service === def.service)
+      if (def.oauth ? account?.status !== 'active' : !connectionState(def, process.env, office.settings?.envDir).connected) throw new Error(`${def.label} belum terhubung untuk brand ini; hubungkan dulu, sampai itu hanya mode mock.`)
+    }
     await office.store.setIntegrationMode(brand, def.service, mode, LOCAL_ACTOR)
+    await office.drive.refresh()
     return { brand, service: def.service, requested: mode }
   }))
+  // One-click connection: Connect returns the provider's consent page; the callback below finishes it.
+  router.post('/brands/:brand/integrations/:service/connect', handle(async (office, request) => {
+    const brand = await brandOf(office, request)
+    const def = serviceOf(request.params.service)
+    return { url: await office.connections.begin(brand, def.service, `${publicBase(request)}${CALLBACK}`, LOCAL_ACTOR) }
+  }))
+  router.delete('/brands/:brand/integrations/:service/connect', handle(async (office, request) => {
+    const brand = await brandOf(office, request)
+    const def = serviceOf(request.params.service)
+    const removed = await office.connections.disconnect(brand, def.service, LOCAL_ACTOR)
+    if (removed) await office.store.setIntegrationMode(brand, def.service, 'mock', LOCAL_ACTOR)
+    await office.drive.refresh()
+    return { disconnected: removed }
+  }))
+  router.post('/brands/:brand/integrations/:service/test', handle(async (office, request) => {
+    const brand = await brandOf(office, request)
+    return office.connections.check(brand, serviceOf(request.params.service).service)
+  }))
+  router.get('/oauth/google/callback', async (request: Request, response: Response) => {
+    const to = (outcome: string) => response.redirect(`/?oauth=${outcome}#/settings`)
+    if (unavailable) { to('error-config'); return }
+    try {
+      const office = await services
+      const query = request.query
+      const done = await office.connections.complete({ code: typeof query.code === 'string' ? query.code : undefined, state: typeof query.state === 'string' ? query.state : undefined, error: typeof query.error === 'string' ? query.error : undefined })
+      await office.drive.refresh()
+      to(`${done.service}-ok`)
+    } catch (error) {
+      to(error instanceof OAuthFailure ? `error-${error.code}` : 'error-exchange')
+    }
+  })
 
   router.get('/brands', handle(async (office) => Promise.all((await office.store.brands()).map(async (brand) => {
     const [agents, summary] = await Promise.all([office.store.agents(brand.id), office.store.summary(brand.id)])

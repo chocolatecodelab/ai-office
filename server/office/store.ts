@@ -121,6 +121,9 @@ function toNote(row: Record<string, unknown>): AgentNote {
   }
 }
 
+export interface ConnectionInfo { brandId: string; service: string; account: string; status: 'active' | 'needs_reauth'; scopes: string; connectedAt: string }
+export interface ConnectionSecret { account: string; accessToken: string; refreshToken: string | null; expiresAt?: Date; status: 'active' | 'needs_reauth' }
+
 export async function audit(db: Queryable, entry: { actor: string; action: string; objectType: string; objectId: string; brandId?: string; before?: unknown; after?: unknown }): Promise<void> {
   await db.query(
     'INSERT INTO audit_log (actor, action, object_type, object_id, brand_id, before, after) VALUES ($1, $2, $3, $4, $5, $6, $7)',
@@ -432,6 +435,62 @@ export class OfficeStore {
       await audit(tx, { actor, action: 'note.delete', objectType: 'agent-note', objectId: id, brandId, before: { kind: note.kind, title: note.title, body: note.body, agentType: note.agentType, active: note.active } })
       return true
     })
+  }
+
+  /** Connected accounts without their tokens: for the Settings page. */
+  async connections(): Promise<ConnectionInfo[]> {
+    const { rows } = await this.db.query('SELECT brand_id, service, account, status, scopes, connected_at FROM integration_connections')
+    return rows.map((row) => ({ brandId: row.brand_id, service: row.service, account: row.account, status: row.status, scopes: row.scopes, connectedAt: iso(row.connected_at)! }))
+  }
+
+  /** The sealed tokens of one connection. Only the integrations code calls this. */
+  async connectionSecret(brandId: string, service: string): Promise<ConnectionSecret | undefined> {
+    const row = (await this.db.query('SELECT account, access_token, refresh_token, expires_at, status FROM integration_connections WHERE brand_id = $1 AND service = $2', [brandId, service])).rows[0]
+    return row ? { account: row.account, accessToken: row.access_token, refreshToken: row.refresh_token, expiresAt: row.expires_at ? new Date(row.expires_at) : undefined, status: row.status } : undefined
+  }
+
+  /** Saves a connection; a new login that brings no refresh token keeps the one already stored. */
+  async saveConnection(input: { brandId: string; service: string; account: string; accessToken: string; refreshToken?: string; expiresAt: Date; scopes: string }, actor: string): Promise<void> {
+    await transaction(this.db, async (tx) => {
+      await tx.query(
+        `INSERT INTO integration_connections (brand_id, service, account, access_token, refresh_token, expires_at, scopes, status, connected_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', $8)
+         ON CONFLICT (brand_id, service) DO UPDATE SET account = $3, access_token = $4, refresh_token = coalesce($5, integration_connections.refresh_token),
+           expires_at = $6, scopes = $7, status = 'active', connected_by = $8, connected_at = now(), updated_at = now()`,
+        [input.brandId, input.service, input.account, input.accessToken, input.refreshToken ?? null, input.expiresAt, input.scopes, actor])
+      await audit(tx, { actor, action: 'integration.connect', objectType: 'integration', objectId: input.service, brandId: input.brandId, after: { account: input.account, scopes: input.scopes } })
+    })
+  }
+
+  async updateAccessToken(brandId: string, service: string, accessToken: string, expiresAt: Date): Promise<void> {
+    await this.db.query("UPDATE integration_connections SET access_token = $3, expires_at = $4, status = 'active', updated_at = now() WHERE brand_id = $1 AND service = $2", [brandId, service, accessToken, expiresAt])
+  }
+
+  async markNeedsReauth(brandId: string, service: string): Promise<void> {
+    await this.db.query("UPDATE integration_connections SET status = 'needs_reauth', updated_at = now() WHERE brand_id = $1 AND service = $2", [brandId, service])
+  }
+
+  /** Removes a connection and returns what it held, so the caller can revoke it at the provider. */
+  async deleteConnection(brandId: string, service: string, actor: string): Promise<ConnectionSecret | undefined> {
+    return transaction(this.db, async (tx) => {
+      const row = (await tx.query('DELETE FROM integration_connections WHERE brand_id = $1 AND service = $2 RETURNING account, access_token, refresh_token, expires_at, status', [brandId, service])).rows[0]
+      if (!row) return undefined
+      await audit(tx, { actor, action: 'integration.disconnect', objectType: 'integration', objectId: service, brandId, before: { account: row.account } })
+      return { account: row.account, accessToken: row.access_token, refreshToken: row.refresh_token, expiresAt: row.expires_at ? new Date(row.expires_at) : undefined, status: row.status }
+    })
+  }
+
+  async createOAuthState(input: { stateHash: string; brandId: string; service: string; verifier: string; redirectUri: string; createdBy: string; ttlMs: number }): Promise<void> {
+    await this.db.query('DELETE FROM oauth_states WHERE expires_at < now()')
+    await this.db.query(
+      'INSERT INTO oauth_states (state_hash, brand_id, service, verifier, redirect_uri, created_by, expires_at) VALUES ($1, $2, $3, $4, $5, $6, $7)',
+      [input.stateHash, input.brandId, input.service, input.verifier, input.redirectUri, input.createdBy, new Date(Date.now() + input.ttlMs)])
+  }
+
+  /** Takes a started connection out of the table (once only) if it has not expired. */
+  async consumeOAuthState(stateHash: string): Promise<{ brandId: string; service: string; verifier: string; redirectUri: string; createdBy: string } | undefined> {
+    const row = (await this.db.query('DELETE FROM oauth_states WHERE state_hash = $1 AND expires_at > now() RETURNING brand_id, service, verifier, redirect_uri, created_by', [stateHash])).rows[0]
+    return row ? { brandId: row.brand_id, service: row.service, verifier: row.verifier, redirectUri: row.redirect_uri, createdBy: row.created_by } : undefined
   }
 
   /** The mode each brand asked for, per service: brand id → service → mode. */

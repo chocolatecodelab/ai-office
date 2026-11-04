@@ -1,5 +1,6 @@
 import { join } from 'node:path'
 import { readEnvFile } from '../settings.js'
+import { DRIVE_SCOPES } from './google.js'
 import { INTEGRATION_MODES, type IntegrationMode } from './index.js'
 
 // The outside services the office can talk to (FR-40..48) and what each one needs before it can leave mock mode.
@@ -21,10 +22,14 @@ export interface ServiceDef {
   howTo: string
   /** Whether the adapter is written; until then credentials only get the service ready for it. */
   adapterReady: boolean
+  /** Modes that make sense for the service; sandbox is left out where the provider has no test account. */
+  modes?: IntegrationMode[]
+  /** Set when people connect their account with one click (OAuth) instead of the office filling a key. */
+  oauth?: { provider: 'google'; scopes: string[] }
 }
 
 export const SERVICES: ServiceDef[] = [
-  { service: 'drive', label: 'Google Drive', purpose: 'Membaca template resmi dan library konten, menulis laporan.', level: 'L0', auth: 'oauth', vars: ['GOOGLE_SERVICE_ACCOUNT_FILE'], file: 'integrations.env', howTo: 'Google Cloud: buat service account, unduh JSON kuncinya ke luar repo, bagikan folder Drive ke emailnya, isi path file itu.', adapterReady: false },
+    { service: 'drive', label: 'Google Drive', purpose: 'Membaca template resmi dan library konten (baca saja).', level: 'L0', auth: 'oauth', vars: ['GOOGLE_OAUTH_CLIENT_ID', 'GOOGLE_OAUTH_CLIENT_SECRET'], file: 'integrations.env', howTo: 'Google Cloud: buat OAuth client (Web), aktifkan Drive API, lalu daftarkan alamat callback Ruang yang tertera di bawah.', adapterReady: true, modes: ['mock', 'live'], oauth: { provider: 'google', scopes: DRIVE_SCOPES } },
   { service: 'google-calendar', label: 'Google Calendar', purpose: 'Menampilkan dan menulis jadwal event OTCA.', level: 'L1', auth: 'oauth', vars: ['GOOGLE_OAUTH_CLIENT_ID', 'GOOGLE_OAUTH_CLIENT_SECRET'], file: 'integrations.env', howTo: 'Google Cloud: buat OAuth client (Web), aktifkan Calendar API, tambahkan alamat callback Ruang.', adapterReady: false },
   { service: 'gpt-image', label: 'GPT Image', purpose: 'Draft visual lewat pool gambar LiteLLM.', level: 'L2', auth: 'api-key', vars: ['OPENAI_API_KEY'], file: 'litellm.env', howTo: 'platform.openai.com: buat API key (bukan langganan Plus) untuk pool gambar.', adapterReady: false },
   { service: 'meta-graph', label: 'Meta Graph (IG/FB)', purpose: 'Posting dan balas komentar setelah approval, membaca komentar.', level: 'L5', auth: 'oauth', vars: ['META_APP_ID', 'META_APP_SECRET'], file: 'integrations.env', howTo: 'developers.facebook.com: buat app, tambahkan izin halaman dan Instagram, daftarkan callback.', adapterReady: false },
@@ -37,10 +42,18 @@ export const SERVICES: ServiceDef[] = [
 ]
 
 /** The variables of a service that are empty. Environment first, then the infra/env files; read on every call, so editing a file needs no restart. */
-export function missingVars(def: ServiceDef, env: NodeJS.ProcessEnv = process.env, envDir?: string): string[] {
+function lookup(def: ServiceDef, env: NodeJS.ProcessEnv, envDir?: string): (name: string) => string | undefined {
   const files = envDir ? [join(envDir, def.file), join(envDir, 'integrations.env'), join(envDir, 'litellm.env')].map(readEnvFile) : []
+  return (name) => [env[name], ...files.map((file) => file[name])].find((value) => value?.trim().replace(/^["']|["']$/g, '').trim())?.trim().replace(/^["']|["']$/g, '')
+}
+
+/** One credential value, for the server's own use (the OAuth client, the encryption key). Never put it in a response. */
+export const credentialValue = (def: ServiceDef, name: string, env: NodeJS.ProcessEnv = process.env, envDir?: string) => lookup(def, env, envDir)(name)
+
+export function missingVars(def: ServiceDef, env: NodeJS.ProcessEnv = process.env, envDir?: string): string[] {
+  const find = lookup(def, env, envDir)
   const filled = (value?: string) => Boolean(value?.trim().replace(/^["']|["']$/g, '').trim())
-  return def.vars.filter((name) => !(filled(env[name]) || files.some((file) => filled(file[name]))))
+  return def.vars.filter((name) => !filled(find(name)))
 }
 
 export interface ConnectionState { connected: boolean; missing: string[] }
