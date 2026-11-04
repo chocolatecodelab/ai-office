@@ -190,6 +190,15 @@ describe.skipIf(!available)('office store, runner and event workflow (Postgres)'
     expect((await store.taskUsage('otca', [])).size).toBe(0)
   })
 
+  it('lists a brand\'s saved results and opens one only for its own brand', async () => {
+    const [asset] = await store.assetList('otca', 5)
+    expect(asset).toMatchObject({ title: expect.any(String), version: expect.any(Number) })
+    expect(asset.size).toBeGreaterThan(0)
+    expect((await store.asset('otca', asset.id))?.content.length).toBeGreaterThan(0)
+    expect(await store.asset('infojerman', asset.id)).toBeUndefined()
+    expect(await store.assetList('infojerman')).toEqual([])
+  })
+
   it('parks a run that returns after the kill switch was pulled, without filing its result', async () => {
     const task = await store.createTask('otca', { agentType: 'manager', kind: 'konten.chat', title: 'ks-4', brief: 'x', createdBy: 'uji' })
     const hermes: HermesClient = {

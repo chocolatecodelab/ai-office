@@ -56,6 +56,8 @@ export interface ActivityEntry {
   objectType?: string; from?: TaskStatus; to?: TaskStatus; reason?: string | null
 }
 
+export interface AssetListItem { id: string; taskId: string; kind: string; version: number; size: number; title: string; agentType: string; createdAt: string }
+
 export interface TaskUsage { runs: number; inputTokens: number; outputTokens: number; durationMs: number | null; source: 'codex' | 'litellm'; model: string }
 
 export interface UsageRow { runs: number; inputTokens: number; outputTokens: number; costUsd: number; tokens: number }
@@ -338,6 +340,23 @@ export class OfficeStore {
       `SELECT * FROM approvals WHERE brand_id = $1 AND (NOT $2 OR decision IS NULL) AND ($3::uuid IS NULL OR task_id = $3) ORDER BY created_at DESC`,
       [brandId, filter.open ?? false, filter.taskId ?? null])
     return rows.map(toApproval)
+  }
+
+  /** The brand's latest saved results with the task they belong to, newest first, without their content. */
+  async assetList(brandId: string, limit = 40): Promise<AssetListItem[]> {
+    const { rows } = await this.db.query(
+      `SELECT a.id, a.task_id, a.kind, a.version, a.created_at, length(a.content)::int AS size, t.title, t.agent_type
+         FROM assets a JOIN tasks t ON t.id = a.task_id AND t.brand_id = a.brand_id
+        WHERE a.brand_id = $1 ORDER BY a.created_at DESC, a.version DESC LIMIT $2`, [brandId, limit])
+    return rows.map((row) => ({ id: row.id, taskId: row.task_id, kind: row.kind, version: row.version, size: row.size, title: row.title, agentType: row.agent_type, createdAt: iso(row.created_at)! }))
+  }
+
+  /** One saved result with its content, only when it belongs to the brand. */
+  async asset(brandId: string, assetId: string): Promise<(Asset & { title: string }) | undefined> {
+    const { rows } = await this.db.query(
+      `SELECT a.*, t.title FROM assets a JOIN tasks t ON t.id = a.task_id AND t.brand_id = a.brand_id WHERE a.brand_id = $1 AND a.id::text = $2`, [brandId, assetId])
+    const row = rows[0]
+    return row ? { id: row.id, taskId: row.task_id, kind: row.kind, version: row.version, content: row.content, createdAt: iso(row.created_at)!, title: row.title } : undefined
   }
 
   async assets(brandId: string, taskId: string): Promise<Asset[]> {

@@ -47,6 +47,10 @@ export interface OfficeSettingsView {
 export interface AgentRoute { source: 'codex' | 'litellm'; model?: 'cepat' | 'final' | 'video'; reasoningEffort: 'low' | 'high' }
 export interface OfficeModels { profile: 'dev' | 'prod'; agents: Array<{ agentType: string; simple: AgentRoute; complex: AgentRoute; urgent: AgentRoute }> }
 
+export interface HealthCheck { name: string; ok: boolean; detail: string; ms: number }
+export interface AssetItem { id: string; taskId: string; brandId: string; brandName: string; kind: string; version: number; size: number; title: string; agentType: string; createdAt: string }
+export interface OfficeAssets { assets: AssetItem[]; drive?: IntegrationStatus }
+
 export interface ActivityItem {
   at: string; brandId: string; brandName: string; kind: 'audit' | 'status'; actor: string; action: string; title: string | null
   from?: TaskStatus; to?: TaskStatus; reason?: string | null

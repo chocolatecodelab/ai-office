@@ -10,6 +10,7 @@ import { readBrands, syncBrands } from './brands.js'
 import { OfficeBus, type OfficeChange } from './bus.js'
 import { EVENT_STAGES, EventWorkflow } from './event-workflow.js'
 import { parseEventDate } from './event-date.js'
+import { systemHealth } from './health.js'
 import { langfuseUsage } from './langfuse-usage.js'
 import { routeFor } from './model-routes.js'
 import { poolStatuses } from './pools.js'
@@ -127,6 +128,27 @@ export function officeRouter(services: Promise<OfficeServices>): Router {
     const brands = await office.store.brands()
     const lists = await Promise.all(brands.map(async (brand) => (await office.store.activity(brand.id, 40)).map((entry) => ({ ...entry, brandName: brand.name }))))
     return lists.flat().sort((a, b) => b.at.localeCompare(a.at)).slice(0, 150)
+  }))
+
+  // Is each service answering? For the Logs page.
+  router.get('/health', handle(async (office) => {
+    const brands = await office.store.brands()
+    return systemHealth({
+      db: office.db, redisUrl: office.settings?.redisUrl ?? 'redis://127.0.0.1:16379', litellmUrl: office.settings?.litellmUrl ?? 'http://127.0.0.1:14000',
+      gateways: brands.map((brand) => ({ brandName: brand.name, url: office.settings?.hermes(brand.id)?.url })),
+    })
+  }))
+
+  // Saved results of every brand for the Folders page (each read is scoped to one brand), and one result's content.
+  router.get('/assets', handle(async (office) => {
+    const brands = await office.store.brands()
+    const lists = await Promise.all(brands.map(async (brand) => (await office.store.assetList(brand.id)).map((item) => ({ ...item, brandId: brand.id, brandName: brand.name }))))
+    return { assets: lists.flat(), drive: integrationStatuses(office.integrations).find((item) => item.service === 'drive') }
+  }))
+  router.get('/brands/:brand/assets/:id', handle(async (office, request) => {
+    const asset = await office.store.asset(await brandOf(office, request), String(request.params.id))
+    if (!asset) throw new Error('Hasil tidak ditemukan.')
+    return asset
   }))
 
   // The model each agent uses for simple, complex and urgent work under the active engine profile.

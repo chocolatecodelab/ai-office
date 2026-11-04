@@ -27,6 +27,8 @@ export interface LangfuseConfig { baseUrl: string; publicKey: string; secretKey:
 export interface OfficeSettings {
   databaseUrl?: string
   redisUrl: string
+  /** Where the api reaches LiteLLM for its health check; the local Compose port by default. */
+  litellmUrl: string
   hermes(brand: string): HermesEndpoint | undefined
   langfuse?: LangfuseConfig
   /** Model table for the agents: dev runs everything on Codex, prod adds the Claude pools (server/office/model-routes.ts). */
@@ -52,6 +54,7 @@ export function officeSettings(env: NodeJS.ProcessEnv = process.env, root = REPO
   return {
     databaseUrl: env.OFFICE_DATABASE_URL || localDatabase,
     redisUrl: env.OFFICE_REDIS_URL || 'redis://127.0.0.1:16379',
+    litellmUrl: env.LITELLM_URL || 'http://127.0.0.1:14000',
     langfuse: langfuseConfig(env, envDir),
     engineProfile: env.ENGINE_PROFILE === 'prod' ? 'prod' : 'dev',
     hermes(brand) {
