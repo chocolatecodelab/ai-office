@@ -51,6 +51,11 @@ export interface Asset { id: string; taskId: string; kind: string; version: numb
 
 export interface AgentView { brandId: string; agentType: string; active: boolean; paused: boolean; status: AgentStatus; currentTask: string | null }
 
+export interface ActivityEntry {
+  at: string; brandId: string; kind: 'audit' | 'status'; actor: string; action: string; title: string | null
+  objectType?: string; from?: TaskStatus; to?: TaskStatus; reason?: string | null
+}
+
 export interface UsageRow { runs: number; inputTokens: number; outputTokens: number; costUsd: number; tokens: number }
 export interface OfficeUsage {
   totals: UsageRow
@@ -133,6 +138,28 @@ export class OfficeStore {
     const totals = rows(brands).reduce((sum, row) => ({ runs: sum.runs + row.runs, tokens: sum.tokens + row.tokens, inputTokens: sum.inputTokens + row.inputTokens, outputTokens: sum.outputTokens + row.outputTokens, costUsd: sum.costUsd + row.costUsd }), { runs: 0, tokens: 0, inputTokens: 0, outputTokens: 0, costUsd: 0 })
     const byTokens = (a: { tokens: number }, b: { tokens: number }) => b.tokens - a.tokens
     return { totals, brands: rows(brands).sort(byTokens), agents: rows(agents).sort(byTokens), kinds: rows(kinds).sort(byTokens), models: rows(models).sort(byTokens) }
+  }
+
+  /** The brand's latest audit entries and task status changes, newest first. */
+  async activity(brandId: string, limit = 60): Promise<ActivityEntry[]> {
+    const [audit, status] = await Promise.all([
+      this.db.query(
+        `SELECT a.created_at, a.actor, a.action, a.object_type AS "objectType",
+                coalesce((SELECT t.title FROM tasks t WHERE t.brand_id = a.brand_id AND t.id::text = a.object_id),
+                         (SELECT t.title FROM approvals p JOIN tasks t ON t.id = p.task_id WHERE p.brand_id = a.brand_id AND p.id::text = a.object_id)) AS title
+           FROM audit_log a WHERE a.brand_id = $1 ORDER BY a.id DESC LIMIT $2`, [brandId, limit]),
+      this.db.query(
+        `SELECT e.created_at, e.payload, t.title FROM task_events e JOIN tasks t ON t.id = e.task_id AND t.brand_id = e.brand_id
+          WHERE e.brand_id = $1 AND e.type = 'status' ORDER BY e.id DESC LIMIT $2`, [brandId, limit]),
+    ])
+    const audited = audit.rows.map((row): ActivityEntry => ({ at: iso(row.created_at)!, brandId, kind: 'audit', actor: row.actor, action: row.action, title: row.title ?? null, objectType: row.objectType }))
+    // A decision is written as an audit entry and a status change in one transaction; show it once.
+    const decided = new Set(audited.map((entry) => `${entry.at}|${entry.title}`))
+    const entries: ActivityEntry[] = [
+      ...audited,
+      ...status.rows.filter((row) => !decided.has(`${iso(row.created_at)}|${row.title}`)).map((row): ActivityEntry => ({ at: iso(row.created_at)!, brandId, kind: 'status', actor: row.payload.by ?? 'sistem', action: 'task.status', title: row.title, from: row.payload.from, to: row.payload.to, reason: row.payload.reason ?? null })),
+    ]
+    return entries.sort((a, b) => b.at.localeCompare(a.at)).slice(0, limit)
   }
 
   async agents(brandId: string): Promise<AgentView[]> {

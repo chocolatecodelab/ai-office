@@ -120,6 +120,13 @@ export function officeRouter(services: Promise<OfficeServices>): Router {
     return lists.flat().sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
   }))
 
+  // The latest audit entries and status changes of every brand, for the Activity page. Each read is scoped to one brand (FR-31).
+  router.get('/activity', handle(async (office) => {
+    const brands = await office.store.brands()
+    const lists = await Promise.all(brands.map(async (brand) => (await office.store.activity(brand.id, 40)).map((entry) => ({ ...entry, brandName: brand.name }))))
+    return lists.flat().sort((a, b) => b.at.localeCompare(a.at)).slice(0, 150)
+  }))
+
   // Events of every brand with their date read from the free text, for the Calendar. Dates that cannot be read are sent without one.
   router.get('/calendar', handle(async (office) => {
     const brands = await office.store.brands()

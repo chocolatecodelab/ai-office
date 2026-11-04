@@ -41,6 +41,11 @@ export interface OfficeSettingsView {
   langfuse: { configured: boolean }
 }
 
+export interface ActivityItem {
+  at: string; brandId: string; brandName: string; kind: 'audit' | 'status'; actor: string; action: string; title: string | null
+  from?: TaskStatus; to?: TaskStatus; reason?: string | null
+}
+
 export interface CalendarEntry { id: string; brandId: string; brandName: string; title: string; tanggal: string | null; date?: string; time?: string }
 export interface OfficeCalendar { entries: CalendarEntry[]; googleCalendar?: IntegrationStatus }
 
