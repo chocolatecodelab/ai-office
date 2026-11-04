@@ -10,6 +10,7 @@ import { readBrands, syncBrands } from './brands.js'
 import { OfficeBus, type OfficeChange } from './bus.js'
 import { EVENT_STAGES, EventWorkflow } from './event-workflow.js'
 import { parseEventDate } from './event-date.js'
+import { validateNote } from './agent-notes.js'
 import { buildPreview } from './asset-preview.js'
 import { extractArtifacts } from './artifacts.js'
 import { localFileStore } from './file-store.js'
@@ -287,6 +288,29 @@ export function officeRouter(services: Promise<OfficeServices>): Router {
     const dir = findContextDir()
     if (!dir) throw new Error('Konteks resmi belum tersedia.')
     return agentContextFiles(dir, agent, brand) ?? []
+  }))
+  // Rules and memory people add on top of the read-only context/ package; every change is audited.
+  const noteAgent = async (office: OfficeServices, brand: string, input: Record<string, unknown>) => {
+    const agent = input.agentType
+    if (typeof agent === 'string' && agent !== 'all' && agent !== '' && !(await office.store.agents(brand)).some((item) => item.agentType === agent && item.active)) throw new Error('Agent tidak aktif di brand ini.')
+  }
+  router.get('/brands/:brand/notes', handle(async (office, request) => office.store.agentNotes(await brandOf(office, request))))
+  router.post('/brands/:brand/notes', handle(async (office, request) => {
+    const brand = await brandOf(office, request)
+    await noteAgent(office, brand, body(request))
+    return office.store.addNote(brand, validateNote(body(request)), LOCAL_ACTOR)
+  }))
+  router.put('/brands/:brand/notes/:id', handle(async (office, request) => {
+    const brand = await brandOf(office, request)
+    await noteAgent(office, brand, body(request))
+    const note = await office.store.updateNote(brand, String(request.params.id), (current) => validateNote(body(request), current), LOCAL_ACTOR)
+    if (!note) throw new Error('Catatan tidak ditemukan.')
+    return note
+  }))
+  router.delete('/brands/:brand/notes/:id', handle(async (office, request) => {
+    const brand = await brandOf(office, request)
+    if (!(await office.store.deleteNote(brand, String(request.params.id), LOCAL_ACTOR))) throw new Error('Catatan tidak ditemukan.')
+    return { deleted: true }
   }))
   router.post('/brands/:brand/agents/:agent/chat', handle(async (office, request) => {
     const { brand, agent } = await agentOf(office, request)

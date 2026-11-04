@@ -275,6 +275,37 @@ describe.skipIf(!available)('office store, runner and event workflow (Postgres)'
     expect((await store.routeOverrides()).has('digital-marketing')).toBe(false)
   })
 
+  it('keeps rules and memory per brand, audits every change, and tells the agent only the active ones', async () => {
+    const rule = await store.addNote('otca', { kind: 'rule', title: 'Sapaan', body: 'Selalu mulai dengan salam.', agentType: null, active: true }, 'uji')
+    const own = await store.addNote('otca', { kind: 'memory', title: 'Pilihan klien', body: 'Klien suka tanggal akhir pekan.', agentType: 'digital-marketing', active: true }, 'uji')
+    await store.addNote('infojerman', { kind: 'rule', title: 'Rahasia brand lain', body: 'jangan bocor', agentType: null, active: true }, 'uji')
+
+    expect((await store.agentNotes('otca')).map((note) => note.title).sort()).toEqual(['Pilihan klien', 'Sapaan'])
+    expect((await store.notesFor('otca', 'digital-marketing')).map((note) => note.id).sort()).toEqual([rule.id, own.id].sort())
+    expect((await store.notesFor('otca', 'manager')).map((note) => note.id)).toEqual([rule.id])
+
+    const changed = await store.updateNote('otca', own.id, (current) => ({ ...current, body: 'Klien suka tanggal tengah bulan.' }), 'uji')
+    expect(changed?.body).toContain('tengah bulan')
+    expect(await store.updateNote('infojerman', own.id, (current) => current, 'uji')).toBeUndefined() // another brand's id
+    expect(await store.deleteNote('infojerman', own.id, 'uji')).toBe(false)
+
+    const hermes = scriptedHermes([{ output: 'a' }, { output: 'b' }])
+    const make = (title: string) => store.createTask('otca', { agentType: 'digital-marketing', kind: 'konten.chat', title, brief: 'x', createdBy: 'uji' })
+    await runTask(deps(hermes), 'otca', (await make('nt-1')).id)
+    expect(hermes.requests[0].instructions).toContain('Selalu mulai dengan salam.')
+    expect(hermes.requests[0].instructions).toContain('tengah bulan')
+    expect(hermes.requests[0].instructions).not.toContain('jangan bocor')
+
+    await store.updateNote('otca', rule.id, (current) => ({ ...current, active: false }), 'uji')
+    await runTask(deps(hermes), 'otca', (await make('nt-2')).id)
+    expect(hermes.requests[1].instructions).not.toContain('Selalu mulai dengan salam.')
+
+    expect(await store.deleteNote('otca', own.id, 'uji')).toBe(true)
+    expect(await store.deleteNote('otca', own.id, 'uji')).toBe(false)
+    const actions = (await store.activity('otca', 100)).filter((entry) => entry.kind === 'audit').map((entry) => entry.action)
+    expect(actions).toEqual(expect.arrayContaining(['note.create', 'note.update', 'note.delete']))
+  })
+
   it('parks a run that returns after the kill switch was pulled, without filing its result', async () => {
     const task = await store.createTask('otca', { agentType: 'manager', kind: 'konten.chat', title: 'ks-4', brief: 'x', createdBy: 'uji' })
     const hermes: HermesClient = {

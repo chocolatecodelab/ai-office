@@ -54,6 +54,8 @@ export interface ModelTestResult { ok: boolean; status: string; reply: string; i
 
 export interface HealthCheck { name: string; ok: boolean; detail: string; ms: number }
 export interface AssetItem { id: string; taskId: string; brandId: string; brandName: string; kind: string; version: number; name: string | null; mime: string | null; downloadable: boolean; size: number; excerpt: string; title: string; agentType: string; createdAt: string }
+export type NoteKind = 'rule' | 'memory'
+export interface AgentNote { id: string; brandId: string; agentType: string | null; kind: NoteKind; title: string; body: string; active: boolean; createdBy: string; updatedBy: string; createdAt: string; updatedAt: string }
 export type AssetPreview = { type: 'document' | 'html'; html: string } | { type: 'text'; text: string }
 export interface OfficeAssets { assets: AssetItem[]; drive?: IntegrationStatus }
 

@@ -1,6 +1,7 @@
 import type { HermesEndpoint } from '../settings.js'
 import { HermesError, isQuotaFailure, type HermesClient } from './hermes-client.js'
 import { routeFor, type EngineProfile } from './model-routes.js'
+import { notesPrompt } from './agent-notes.js'
 import { agentInstructions, taskInput } from './prompts.js'
 import { RUNNABLE } from './status.js'
 import type { OfficeStore } from './store.js'
@@ -62,7 +63,7 @@ export async function runTask(deps: RunnerDeps, brandId: string, taskId: string)
   }
 
   try {
-    const instructions = agentInstructions(deps.contextDir, task.agentType, brandId, await deps.brandName(brandId), task.kind === 'konten.chat')
+    const instructions = agentInstructions(deps.contextDir, task.agentType, brandId, await deps.brandName(brandId), task.kind === 'konten.chat', notesPrompt(await store.notesFor(brandId, task.agentType)))
     let input = taskInput(running, await store.revisionNotes(brandId, taskId))
     if (task.kind === 'konten.chat') {
       const history = (await store.tasks(brandId)).filter(item => item.agentType === task.agentType && item.kind === 'konten.chat' && item.id !== task.id && item.createdAt < task.createdAt && item.result).slice(0,10).reverse()

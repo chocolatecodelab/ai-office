@@ -58,6 +58,7 @@ Marketing / Event Specialist OTCA.
 | Integrasi tanpa akun | GPT Image, Meta Ads sandbox, YouTube, WhatsApp Business, dan Scalev dibuat **kerangkanya dulu** (adapter + mode `mock`) dan dinyalakan saat akun tersedia | jawaban #8 |
 | Pipeline video | Worker `render` memakai **`VIDEO_EDITOR/video-system`** (Python + Remotion), disesuaikan dengan blueprint dan best practice | jawaban #10 |
 | Konteks | `context/` di repo adalah sumber tunggal aturan, agent, dan brand; di-mount read-only ke Hermes | [BP] |
+| Aturan & memori tambahan | Tabel `agent_notes` per brand (untuk satu agent atau semua agent brand), bisa ditambah, diubah, dinonaktifkan, dihapus dari tab Memori & Rules dan halaman Memory; dimuat ke prompt setelah konteks resmi, yang selalu menang; batas 2.000 karakter per catatan, 100 per brand, 6.000 karakter di prompt; setiap perubahan masuk audit log (`note.*`). `context/` tetap hanya lewat PR. | FR-02, audit |
 | Approval | Matriks per jenis pekerjaan + Budget Approver + consent record | [BP], `context/_shared/approval-matrix.md` |
 
 ---

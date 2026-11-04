@@ -1,4 +1,5 @@
 import { agentContextFiles, findContextDir } from '../otca-context.js'
+import { NOTE_LIMITS, type AgentNote, type NoteInput } from './agent-notes.js'
 import { extractArtifacts } from './artifacts.js'
 import type { FileStore } from './file-store.js'
 import type { Route, RouteOverrides, Weight } from './model-routes.js'
@@ -108,6 +109,14 @@ function toApproval(row: Record<string, unknown>): Approval {
     approvalType: row.approval_type as ApprovalType, decision: row.decision as Approval['decision'],
     note: row.note as string | null, decidedBy: row.decided_by as string | null,
     decidedAt: iso(row.decided_at), createdAt: iso(row.created_at)!,
+  }
+}
+
+function toNote(row: Record<string, unknown>): AgentNote {
+  return {
+    id: row.id as string, brandId: row.brand_id as string, agentType: row.agent_type as string | null, kind: row.kind as AgentNote['kind'],
+    title: row.title as string, body: row.body as string, active: row.active as boolean, createdBy: row.created_by as string, updatedBy: row.updated_by as string,
+    createdAt: iso(row.created_at)!, updatedAt: iso(row.updated_at)!,
   }
 }
 
@@ -371,6 +380,56 @@ export class OfficeStore {
          ON CONFLICT (agent_type, weight) DO UPDATE SET source = $3, model = $4, reasoning_effort = $5, updated_by = $6, updated_at = now()`,
         [agentType, weight, route.source, route.model ?? null, route.reasoningEffort, actor])
       await audit(tx, { actor, action: 'model.set', objectType: 'agent-route', objectId: `${agentType}/${weight}`, before, after: route })
+    })
+  }
+
+  /** All rules and memory of a brand, rules first, newest first (for the Memory views). */
+  async agentNotes(brandId: string): Promise<AgentNote[]> {
+    const { rows } = await this.db.query('SELECT * FROM agent_notes WHERE brand_id = $1 ORDER BY kind DESC, updated_at DESC', [brandId])
+    return rows.map(toNote)
+  }
+
+  /** The notes one agent is told: its own and the brand-wide ones; inactive ones are included, notesPrompt skips them. */
+  async notesFor(brandId: string, agentType: string): Promise<AgentNote[]> {
+    const { rows } = await this.db.query('SELECT * FROM agent_notes WHERE brand_id = $1 AND (agent_type IS NULL OR agent_type = $2) AND active', [brandId, agentType])
+    return rows.map(toNote)
+  }
+
+  async addNote(brandId: string, input: NoteInput, actor: string): Promise<AgentNote> {
+    return transaction(this.db, async (tx) => {
+      const count = Number((await tx.query('SELECT count(*) FROM agent_notes WHERE brand_id = $1', [brandId])).rows[0].count)
+      if (count >= NOTE_LIMITS.perBrand) throw new Error(`Satu brand maksimal ${NOTE_LIMITS.perBrand} catatan; hapus yang tidak terpakai dulu.`)
+      const { rows } = await tx.query(
+        'INSERT INTO agent_notes (brand_id, agent_type, kind, title, body, active, created_by, updated_by) VALUES ($1, $2, $3, $4, $5, $6, $7, $7) RETURNING *',
+        [brandId, input.agentType, input.kind, input.title, input.body, input.active, actor])
+      const note = toNote(rows[0])
+      await audit(tx, { actor, action: 'note.create', objectType: 'agent-note', objectId: note.id, brandId, after: input })
+      return note
+    })
+  }
+
+  /** Changes a note; `change` is checked against the note as it is now. Undefined when the brand has no such note. */
+  async updateNote(brandId: string, id: string, change: (current: NoteInput) => NoteInput, actor: string): Promise<AgentNote | undefined> {
+    return transaction(this.db, async (tx) => {
+      const found = (await tx.query('SELECT * FROM agent_notes WHERE brand_id = $1 AND id = $2 FOR UPDATE', [brandId, id])).rows[0]
+      if (!found) return undefined
+      const before = toNote(found)
+      const next = change({ kind: before.kind, title: before.title, body: before.body, agentType: before.agentType, active: before.active })
+      const { rows } = await tx.query(
+        'UPDATE agent_notes SET agent_type = $3, kind = $4, title = $5, body = $6, active = $7, updated_by = $8, updated_at = now() WHERE brand_id = $1 AND id = $2 RETURNING *',
+        [brandId, id, next.agentType, next.kind, next.title, next.body, next.active, actor])
+      await audit(tx, { actor, action: 'note.update', objectType: 'agent-note', objectId: id, brandId, before: { kind: before.kind, title: before.title, body: before.body, agentType: before.agentType, active: before.active }, after: next })
+      return toNote(rows[0])
+    })
+  }
+
+  async deleteNote(brandId: string, id: string, actor: string): Promise<boolean> {
+    return transaction(this.db, async (tx) => {
+      const removed = await tx.query('DELETE FROM agent_notes WHERE brand_id = $1 AND id = $2 RETURNING *', [brandId, id])
+      if (!removed.rowCount) return false
+      const note = toNote(removed.rows[0])
+      await audit(tx, { actor, action: 'note.delete', objectType: 'agent-note', objectId: id, brandId, before: { kind: note.kind, title: note.title, body: note.body, agentType: note.agentType, active: note.active } })
+      return true
     })
   }
 

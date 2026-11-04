@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { AgentNotes } from '../components/AgentNotes.tsx'
 import { FLOOR_ORDER } from '../office3d/building.ts'
 import { AGENT_NAMES, officeRequest, type OfficeBrand } from '../office-api.ts'
 import { usePolling } from '../polling.ts'
@@ -38,13 +39,15 @@ export function Memory() {
 
   const shown = files?.find((file) => file.path === open)
   return <>
-    <PageTitle eyebrow="MEMORY" title="Memory">Konteks resmi yang dibawa setiap agent: definisi peran, aturan bersama, dan data brand. Hanya dibaca; perubahan lewat PR ke folder context/, lalu restart service.</PageTitle>
+    <PageTitle eyebrow="MEMORY" title="Memory">Apa yang dibawa setiap agent: aturan dan memori tambahan dari tim (bisa ditambah, diubah, dinonaktifkan, dihapus) dan konteks resmi yang hanya dibaca (perubahan lewat PR ke folder context/, lalu restart service).</PageTitle>
     <div className="toolbar" role="group" aria-label="Brand">
       {ordered.map((item) => <button type="button" key={item.id} className={`chip chip-button ${item.id === brand.id ? 'active' : ''}`} aria-pressed={item.id === brand.id} onClick={() => setBrandId(item.id)}>{item.name}</button>)}
     </div>
     <div className="toolbar" role="group" aria-label="Agent">
       {brand.agents.filter((item) => item.active).map((item) => <button type="button" key={item.agentType} className={`chip chip-button ${item.agentType === agent.agentType ? 'active' : ''}`} aria-pressed={item.agentType === agent.agentType} onClick={() => setAgentType(item.agentType)}>{AGENT_NAMES[item.agentType] ?? item.agentType}</button>)}
     </div>
+    <AgentNotes brandId={brand.id} agentType={agent.agentType} agentName={AGENT_NAMES[agent.agentType] ?? agent.agentType}/>
+    <h2 className="notes-official">Konteks resmi <small>hanya dibaca</small></h2>
     {error && <p className="form-error" role="alert">{error}</p>}
     {!files && !error && <p className="muted">Membaca konteks…</p>}
     {files && <section className="data-list">{files.map((file) => <article key={file.path}>

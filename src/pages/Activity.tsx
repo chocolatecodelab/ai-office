@@ -8,6 +8,9 @@ const ACTION_TEXT: Record<string, string> = {
   'task.create': 'Tugas dibuat',
   'approval.approved': 'Approval disetujui',
   'approval.rejected': 'Approval ditolak, diminta revisi',
+  'note.create': 'Catatan agent ditambah',
+  'note.update': 'Catatan agent diubah',
+  'note.delete': 'Catatan agent dihapus',
   'kill-switch.pause': 'Kill switch: dijeda',
   'kill-switch.resume': 'Kill switch: dilanjutkan',
 }
