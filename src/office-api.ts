@@ -10,6 +10,8 @@ export interface OfficeTask {
   id: string; brandId: string; agentType: string; eventId: string | null; kind: string; title: string; brief: string
   priority: number; urgent: boolean; complex: boolean; status: TaskStatus; attempts: number
   result: string | null; error: string | null; retryAt: string | null; createdAt: string; updatedAt: string
+  /** Chat replies only: the reply without its file blocks, and the files it carried. */
+  text?: string; artifacts?: Array<{ name: string; content: string; assetId?: string; mime?: string }>
 }
 
 export interface OfficeAgent { brandId: string; agentType: string; active: boolean; paused: boolean; status: AgentStatus; currentTask: string | null; retryAt?: string | null }
@@ -44,11 +46,14 @@ export interface OfficeSettingsView {
   langfuse: { configured: boolean }
 }
 
-export interface AgentRoute { source: 'codex' | 'litellm'; model?: 'cepat' | 'final' | 'video'; reasoningEffort: 'low' | 'high' }
-export interface OfficeModels { profile: 'dev' | 'prod'; agents: Array<{ agentType: string; simple: AgentRoute; complex: AgentRoute; urgent: AgentRoute }> }
+export type Weight = 'simple' | 'complex' | 'urgent'
+export interface AgentRoute { source: 'codex' | 'litellm'; model?: string; reasoningEffort: 'low' | 'high' }
+export interface ModelEntry { agentType: string; simple: AgentRoute; complex: AgentRoute; urgent: AgentRoute; defaults: Record<Weight, AgentRoute>; overridden: Weight[] }
+export interface OfficeModels { profile: 'dev' | 'prod'; codexModels: string[]; claudeAliases: string[]; agents: ModelEntry[] }
+export interface ModelTestResult { ok: boolean; status: string; reply: string; inputTokens: number; outputTokens: number; durationMs: number }
 
 export interface HealthCheck { name: string; ok: boolean; detail: string; ms: number }
-export interface AssetItem { id: string; taskId: string; brandId: string; brandName: string; kind: string; version: number; size: number; title: string; agentType: string; createdAt: string }
+export interface AssetItem { id: string; taskId: string; brandId: string; brandName: string; kind: string; version: number; name: string | null; mime: string | null; downloadable: boolean; size: number; title: string; agentType: string; createdAt: string }
 export interface OfficeAssets { assets: AssetItem[]; drive?: IntegrationStatus }
 
 export interface ActivityItem {
@@ -88,7 +93,7 @@ export const AGENT_NAMES: Record<string, string> = {
 
 export class OfficeRequestError extends Error {}
 
-export async function officeRequest<T>(method: 'GET' | 'POST' | 'PATCH', path: string, body?: unknown): Promise<T> {
+export async function officeRequest<T>(method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE', path: string, body?: unknown): Promise<T> {
   const response = await fetch(`/api/office${path}`, {
     method, headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),

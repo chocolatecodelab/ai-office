@@ -10,9 +10,11 @@ import { readBrands, syncBrands } from './brands.js'
 import { OfficeBus, type OfficeChange } from './bus.js'
 import { EVENT_STAGES, EventWorkflow } from './event-workflow.js'
 import { parseEventDate } from './event-date.js'
+import { extractArtifacts } from './artifacts.js'
+import { localFileStore } from './file-store.js'
 import { systemHealth } from './health.js'
 import { langfuseUsage } from './langfuse-usage.js'
-import { routeFor } from './model-routes.js'
+import { CLAUDE_ALIASES, CODEX_MODELS, WEIGHTS, routesFor, validateRoute, type EngineProfile, type RouteOverrides, type Weight } from './model-routes.js'
 import { poolStatuses } from './pools.js'
 import { createHermesClient, type HermesClient } from './hermes-client.js'
 import { TaskQueue, redisConnection } from './queue.js'
@@ -46,6 +48,7 @@ export interface OfficeServices {
   bus: OfficeBus
   integrations: Integrations
   settings?: OfficeSettings
+  hermes?: HermesClient
 }
 
 export interface OfficeOptions { settings?: OfficeSettings; contextDir?: string; hermes?: HermesClient; startWorker?: boolean }
@@ -59,12 +62,13 @@ export async function startOffice(options: OfficeOptions = {}): Promise<OfficeSe
   await migrate(db)
   await syncBrands(db, readBrands(contextDir))
   const bus = new OfficeBus()
-  const store = new OfficeStore(db, bus)
+  const store = new OfficeStore(db, bus, localFileStore(settings.filesDir))
   const integrations: Integrations = { drive: mockDrive() }
   const brandNames = new Map((await store.brands()).map((brand) => [brand.id, brand.name]))
+  const hermes = options.hermes ?? createHermesClient()
   const queue = new TaskQueue(redisConnection(settings.redisUrl), {
     store,
-    hermes: options.hermes ?? createHermesClient(),
+    hermes,
     endpoint: (brandId) => settings.hermes(brandId),
     contextDir,
     brandName: async (brandId) => brandNames.get(brandId) ?? brandId,
@@ -75,7 +79,7 @@ export async function startOffice(options: OfficeOptions = {}): Promise<OfficeSe
     const recovered = await queue.recover(store)
     if (recovered) console.log(`Office: ${recovered} tugas dijadwalkan ulang setelah start.`)
   }
-  return { db, store, events: new EventWorkflow(store, bus, integrations.drive), queue, bus, integrations, settings }
+  return { db, store, events: new EventWorkflow(store, bus, integrations.drive), queue, bus, integrations, settings, hermes }
 }
 
 const message = (error: unknown) => error instanceof Error ? error.message : String(error)
@@ -142,9 +146,26 @@ export function officeRouter(services: Promise<OfficeServices>): Router {
   // Saved results of every brand for the Folders page (each read is scoped to one brand), and one result's content.
   router.get('/assets', handle(async (office) => {
     const brands = await office.store.brands()
-    const lists = await Promise.all(brands.map(async (brand) => (await office.store.assetList(brand.id)).map((item) => ({ ...item, brandId: brand.id, brandName: brand.name }))))
+    const lists = await Promise.all(brands.map(async (brand) => (await office.store.assetList(brand.id, 200)).map((item) => ({ ...item, brandId: brand.id, brandName: brand.name }))))
     return { assets: lists.flat(), drive: integrationStatuses(office.integrations).find((item) => item.service === 'drive') }
   }))
+  // The bytes of a stored file, always as an attachment of its own type and never sniffed or run in the page.
+  router.get('/brands/:brand/assets/:id/file', async (request: Request, response: Response) => {
+    if (unavailable) { response.status(503).json({ error: `Office belum siap: ${unavailable}` }); return }
+    try {
+      const office = await services
+      const file = await office.store.assetFile(await brandOf(office, request), String(request.params.id))
+      if (!file) { response.status(404).json({ error: 'Berkas tidak ditemukan.' }); return }
+      response.set({
+        'Content-Type': file.mime,
+        'Content-Disposition': `attachment; filename="download"; filename*=UTF-8''${encodeURIComponent(file.name)}`,
+        'X-Content-Type-Options': 'nosniff',
+        'Content-Security-Policy': "sandbox; default-src 'none'",
+      }).send(file.data)
+    } catch (error) {
+      response.status(400).json({ error: message(error) })
+    }
+  })
   router.get('/brands/:brand/assets/:id', handle(async (office, request) => {
     const asset = await office.store.asset(await brandOf(office, request), String(request.params.id))
     if (!asset) throw new Error('Hasil tidak ditemukan.')
@@ -152,16 +173,53 @@ export function officeRouter(services: Promise<OfficeServices>): Router {
   }))
 
   // The model each agent uses for simple, complex and urgent work under the active engine profile.
+  // Staff can change a role's model per weight (Codex model and reasoning in dev, Claude pools too in prod); the
+  // profile table is the default and a reset puts it back. Every change is audited.
+  const agentTypes = async (office: OfficeServices) => {
+    const brands = await office.store.brands()
+    return [...new Set((await Promise.all(brands.map((brand) => office.store.agents(brand.id)))).flat().map((agent) => agent.agentType))]
+  }
+  const modelEntry = (agentType: string, profile: EngineProfile, overrides: Map<string, RouteOverrides>) => {
+    const own = overrides.get(agentType) ?? {}
+    const effective = routesFor(agentType, profile, own)
+    return { agentType, ...effective, defaults: routesFor(agentType, profile), overridden: WEIGHTS.filter((weight) => own[weight] && effective[weight] === own[weight]) }
+  }
+  const modelWeight = (request: Request): Weight => {
+    const weight = String(request.params.weight)
+    if (!(WEIGHTS as readonly string[]).includes(weight)) throw new Error('Bobot harus simple, complex, atau urgent.')
+    return weight as Weight
+  }
   router.get('/models', handle(async (office) => {
     const profile = office.settings?.engineProfile ?? 'dev'
-    const brands = await office.store.brands()
-    const types = [...new Set((await Promise.all(brands.map((brand) => office.store.agents(brand.id)))).flat().map((agent) => agent.agentType))]
-    return { profile, agents: types.map((agentType) => ({
-      agentType,
-      simple: routeFor({ agentType, urgent: false, complex: false }, profile),
-      complex: routeFor({ agentType, urgent: false, complex: true }, profile),
-      urgent: routeFor({ agentType, urgent: true, complex: true }, profile),
-    })) }
+    const overrides = await office.store.routeOverrides()
+    return { profile, codexModels: CODEX_MODELS, claudeAliases: profile === 'prod' ? CLAUDE_ALIASES : [], agents: (await agentTypes(office)).map((agentType) => modelEntry(agentType, profile, overrides)) }
+  }))
+  router.put('/models/:agent/:weight', handle(async (office, request) => {
+    const profile = office.settings?.engineProfile ?? 'dev'
+    const agentType = String(request.params.agent)
+    if (!(await agentTypes(office)).includes(agentType)) throw new Error(`Agent ${agentType} tidak dikenal.`)
+    await office.store.setRoute(agentType, modelWeight(request), validateRoute(body(request), profile), LOCAL_ACTOR)
+    return modelEntry(agentType, profile, await office.store.routeOverrides())
+  }))
+  router.delete('/models/:agent/:weight', handle(async (office, request) => {
+    const profile = office.settings?.engineProfile ?? 'dev'
+    const agentType = String(request.params.agent)
+    await office.store.clearRoute(agentType, modelWeight(request), LOCAL_ACTOR)
+    return modelEntry(agentType, profile, await office.store.routeOverrides())
+  }))
+  // A tiny run on the first brand's Hermes with the model asked for, to see whether it works before it is saved.
+  router.post('/models/test', handle(async (office, request) => {
+    const route = validateRoute(body(request), office.settings?.engineProfile ?? 'dev')
+    const brand = (await office.store.brands()).find((item) => office.settings?.hermes(item.id))
+    const endpoint = brand ? office.settings?.hermes(brand.id) : undefined
+    if (!office.hermes || !endpoint) throw new Error('Belum ada Hermes yang terhubung untuk menguji model.')
+    const started = Date.now()
+    try {
+      const result = await office.hermes.run(endpoint, { input: 'Balas satu kata: OK', instructions: 'Jawab sangat singkat.', sessionId: `model-test-${started}`, model: route.model, provider: route.provider, reasoningEffort: 'low' }, `model-test-${started}`)
+      return { ok: result.status === 'completed' && Boolean(result.output.trim()), status: result.status, reply: result.output.trim().slice(0, 80), inputTokens: result.inputTokens, outputTokens: result.outputTokens, durationMs: Date.now() - started }
+    } catch (error) {
+      return { ok: false, status: 'failed', reply: message(error).slice(0, 200), inputTokens: 0, outputTokens: 0, durationMs: Date.now() - started }
+    }
   }))
 
   // Events of every brand with their date read from the free text, for the Calendar. Dates that cannot be read are sent without one.
@@ -194,7 +252,17 @@ export function officeRouter(services: Promise<OfficeServices>): Router {
   router.get('/brands/:brand/tasks', handle(async (office, request) => {
     const status = text(request.query.status)
     if (status && !TASK_STATUSES.includes(status as TaskStatus)) throw new Error(`Status ${status} tidak dikenal.`)
-    return office.store.tasks(await brandOf(office, request), { status: status as TaskStatus | undefined })
+    const brandId = await brandOf(office, request)
+    const tasks = await office.store.tasks(brandId, { status: status as TaskStatus | undefined })
+    const stored = await office.store.artifactFiles(brandId, tasks.filter((task) => task.kind === 'konten.chat' && task.result).map((task) => task.id))
+    // A chat reply is sent as its text plus the files it carried, so the chat can show them as file cards.
+    // A file kept in the file store (a PDF) also carries the id to download it by.
+    return tasks.map((task) => {
+      if (task.kind !== 'konten.chat' || !task.result) return task
+      const { text, artifacts } = extractArtifacts(task.result)
+      const files = stored.get(task.id) ?? []
+      return { ...task, text, artifacts: artifacts.map((artifact) => { const file = files.find((item) => item.name === artifact.name); return file ? { ...artifact, assetId: file.id, mime: file.mime } : artifact }) }
+    })
   }))
 
   const agentOf = async (office: OfficeServices, request: Request) => {

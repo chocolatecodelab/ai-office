@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { AGENT_NAMES, AGENT_STATUS_LABELS, TASK_STATUS_LABELS, officeRequest, useOfficeLive, type OfficeAgent, type OfficeBrand, type OfficeTask, type OfficeApproval } from '../office-api.ts'
 import { ApprovalCard } from './OfficeApprovalCard.tsx'
 import { OfficeTaskForm } from './OfficeTaskForm.tsx'
+import { downloadText, sizeLabel } from '../download.ts'
 import { PixelCharacter } from '../pages/OfficeDetails.tsx'
 
 const TABS = ['Chat', 'Tugas', 'Approval', 'Folder', 'Memori & Rules'] as const
@@ -22,6 +23,7 @@ export function OfficeAgentPanel({ brand, agent, onClose }: { brand: OfficeBrand
   const [busy,setBusy] = useState(false)
   const [ready,setReady] = useState(false)
   const [importing,setImporting] = useState(false)
+  const [openFile,setOpenFile] = useState<string>()
   const assetGeneration=useRef(0)
   const actionLock=useRef(false)
   const active = useRef(true)
@@ -86,7 +88,12 @@ export function OfficeAgentPanel({ brand, agent, onClose }: { brand: OfficeBrand
         {ready && chats.length===0 && <div className="chat-empty-hint"><h3>Halo, saya {name}.</h3><p>Diskusikan kebutuhan {brand.name} atau berikan brief. Hasil kerja tetap melalui approval.</p><button onClick={() => setInput('Apa yang bisa kamu bantu sesuai peran dan aturan brand ini?')}>Kenali peran agent</button></div>}
         {chats.map(t => <div key={t.id}>
           <div className="chat-bubble-row user-row"><div className="chat-bubble user-bubble"><div className="bubble-header">Anda · {new Date(t.createdAt).toLocaleString('id-ID')}</div><div className="bubble-content">{t.brief}</div></div></div>
-          <div className="chat-bubble-row agent-row"><div className="chat-bubble agent-bubble"><div className="bubble-header">{name} · {TASK_STATUS_LABELS[t.status]}</div><div className="bubble-content">{t.result || t.error || (t.status==='running' ? 'Sedang menyusun jawaban…' : t.status==='waiting_quota' ? 'Menunggu kuota tersedia.' : 'Pesan masuk antrean.')}</div>{t.status==='failed' && <button disabled={busy} onClick={() => void perform(() => officeRequest('POST',`${base}/tasks/${t.id}/retry`))}>Coba ulang</button>}</div></div>
+          <div className="chat-bubble-row agent-row"><div className="chat-bubble agent-bubble"><div className="bubble-header">{name} · {TASK_STATUS_LABELS[t.status]}</div><div className="bubble-content">{(t.text ?? t.result) || t.error || (t.status==='running' ? 'Sedang menyusun jawaban…' : t.status==='waiting_quota' ? 'Menunggu kuota tersedia.' : 'Pesan masuk antrean.')}</div>{(t.artifacts ?? []).map(file => <div className="chat-file" key={file.name}>
+            <div className="chat-file-head"><strong>{file.name}</strong><small>{sizeLabel(new Blob([file.content]).size)}</small>
+              <button type="button" aria-expanded={openFile===`${t.id}:${file.name}`} onClick={() => setOpenFile(openFile===`${t.id}:${file.name}` ? undefined : `${t.id}:${file.name}`)}>{openFile===`${t.id}:${file.name}` ? 'Tutup' : file.assetId ? 'Lihat sumber' : 'Lihat'}</button>
+              {file.assetId ? <a className="chat-file-link" href={`/api/office${base}/assets/${file.assetId}/file`} download={file.name}>Unduh PDF</a> : <button type="button" onClick={() => downloadText(file.name,file.content)}>Unduh</button>}</div>
+            {openFile===`${t.id}:${file.name}` && <pre className="chat-file-body">{file.content}</pre>}
+          </div>)}{t.status==='failed' && <button disabled={busy} onClick={() => void perform(() => officeRequest('POST',`${base}/tasks/${t.id}/retry`))}>Coba ulang</button>}</div></div>
         </div>)}<div ref={end}/>
       </div><form className="chat-input-bar" onSubmit={e => {e.preventDefault();send()}}><textarea aria-label="Pesan untuk agent" placeholder={`Pesan untuk ${name}…`} maxLength={12000} value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => {if(e.key==='Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {e.preventDefault(); if(!pending) send()} }}/><button disabled={busy || pending || !ready || !input.trim()}>{busy ? 'Mengirim…' : pending ? 'Menunggu jawaban' : 'Kirim'}</button></form></div>}
       {tab==='Tugas' && <div><OfficeTaskForm brand={brand.id} agent={agent.agentType} disabled={busy || !ready} submit={perform}/>{tasks.length===0 && <p>Belum ada tugas.</p>}{tasks.map(t => <article className="office-task-row" key={t.id}><strong>{t.title}</strong><small>{TASK_STATUS_LABELS[t.status]}</small><p>{t.brief}</p>{t.error && <p role="alert">{t.error}</p>}{t.result && <details><summary>Lihat hasil lengkap</summary><pre>{t.result}</pre></details>}{t.status==='failed' && <button disabled={busy} onClick={() => void perform(() => officeRequest('POST',`${base}/tasks/${t.id}/retry`))}>Coba ulang tugas</button>}{['queued','waiting_quota','paused','failed'].includes(t.status) && <button disabled={busy} onClick={() => void perform(() => officeRequest('POST',`${base}/tasks/${t.id}/cancel`,{reason:'Dibatalkan dari panel agent'}))}>Batalkan tugas</button>}</article>)}</div>}

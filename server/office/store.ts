@@ -1,4 +1,9 @@
 import { agentContextFiles, findContextDir } from '../otca-context.js'
+import { extractArtifacts } from './artifacts.js'
+import type { FileStore } from './file-store.js'
+import type { Route, RouteOverrides, Weight } from './model-routes.js'
+import { brandStyle } from './pdf-html.js'
+import { renderDocumentPdf } from './render-pdf.js'
 import { screenContent, type ContentQc } from './content-qc.js'
 import type pg from 'pg'
 import { transaction, type Db, type Queryable } from '../db/index.js'
@@ -56,7 +61,7 @@ export interface ActivityEntry {
   objectType?: string; from?: TaskStatus; to?: TaskStatus; reason?: string | null
 }
 
-export interface AssetListItem { id: string; taskId: string; kind: string; version: number; size: number; title: string; agentType: string; createdAt: string }
+export interface AssetListItem { id: string; taskId: string; kind: string; version: number; name: string | null; mime: string | null; downloadable: boolean; size: number; title: string; agentType: string; createdAt: string }
 
 export interface TaskUsage { runs: number; inputTokens: number; outputTokens: number; durationMs: number | null; source: 'codex' | 'litellm'; model: string }
 
@@ -114,7 +119,7 @@ export async function audit(db: Queryable, entry: { actor: string; action: strin
 }
 
 export class OfficeStore {
-  constructor(readonly db: Db, private readonly bus: OfficeBus) {}
+  constructor(readonly db: Db, private readonly bus: OfficeBus, private readonly files?: FileStore) {}
 
   async brands(): Promise<Array<{ id: string; name: string; color: string; paused: boolean }>> {
     return (await this.db.query('SELECT id, name, color, paused FROM brands ORDER BY id')).rows
@@ -308,12 +313,34 @@ export class OfficeStore {
    * as done without an approval; every other kind of work goes through submitForApproval.
    */
   async completeChat(brandId: string, taskId: string, output: Parameters<OfficeStore['submitForApproval']>[2]): Promise<Task> {
+    // A *.pdf file is rendered first, outside the transaction: the file store gets the bytes, the asset keeps the key.
+    const artifacts = extractArtifacts(output.content).artifacts
+    const binaries = new Map<string, { key: string; size: number }>()
+    const pdfFiles = artifacts.filter((item) => item.name.endsWith('.pdf'))
+    if (this.files && pdfFiles.length > 0) {
+      const brand = (await this.brands()).find((item) => item.id === brandId)
+      const style = brandStyle(brandId, brand?.name ?? brandId, brand?.color ?? '')
+      for (const file of pdfFiles) {
+        try {
+          const pdf = await renderDocumentPdf(file.content, { name: file.name, brand: style })
+          binaries.set(file.name, { key: await this.files.put(brandId, 'pdf', pdf), size: pdf.length })
+        } catch (error) {
+          console.warn(`PDF ${file.name} gagal dibuat; sumbernya tetap disimpan:`, error instanceof Error ? error.message : error)
+        }
+      }
+    }
     return transaction(this.db, async (tx) => {
       const current = await this.task(brandId, taskId, tx)
       if (!current) throw new Error(`Tugas ${taskId} tidak ditemukan di brand ${brandId}.`)
       if (current.kind !== 'konten.chat') throw new Error(`Tugas ${taskId} bukan balasan chat; gunakan submitForApproval.`)
       const version = (await tx.query('SELECT coalesce(max(version), 0) + 1 AS next FROM assets WHERE task_id = $1', [taskId])).rows[0].next as number
       await tx.query('INSERT INTO assets (task_id, brand_id, kind, version, content) VALUES ($1, $2, $3, $4, $5)', [taskId, brandId, current.kind, version, output.content])
+      // Files the reply carries (artifacts.ts) become assets of their own, numbered after the reply.
+      for (const [index, file] of artifacts.entries()) {
+        const binary = binaries.get(file.name)
+        await tx.query('INSERT INTO assets (task_id, brand_id, kind, version, content, name, mime, storage_key, size_bytes) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)',
+          [taskId, brandId, 'artifact', version + 1 + index, file.content, file.name, binary ? 'application/pdf' : null, binary?.key ?? null, binary?.size ?? null])
+      }
       await tx.query('INSERT INTO cost_events (task_id, brand_id, source, model, input_tokens, output_tokens, duration_ms) VALUES ($1, $2, $3, $4, $5, $6, $7)',
         [taskId, brandId, output.source, output.model, output.inputTokens, output.outputTokens, output.durationMs ?? null])
       return this.transition(brandId, taskId, 'done', { actor: `agent:${current.agentType}`, reason: `balasan chat v${version}`, patch: { result: output.content, error: null, run_id: output.runId } }, tx)
@@ -323,6 +350,37 @@ export class OfficeStore {
   async latestContentQc(brandId:string,taskId:string):Promise<ContentQc | undefined> {
     const {rows}=await this.db.query("SELECT payload FROM task_events WHERE brand_id=$1 AND task_id=$2 AND type='content_qc' ORDER BY id DESC LIMIT 1",[brandId,taskId])
     return rows[0]?.payload.report as ContentQc | undefined
+  }
+
+  /** The model overrides staff set, per agent role and weight (agent_routes). */
+  async routeOverrides(): Promise<Map<string, RouteOverrides>> {
+    const { rows } = await this.db.query('SELECT agent_type, weight, source, model, reasoning_effort FROM agent_routes')
+    const overrides = new Map<string, RouteOverrides>()
+    for (const row of rows) {
+      const route: Route = { source: row.source, ...(row.model ? { model: row.model as string } : {}), ...(row.source === 'litellm' ? { provider: 'litellm' as const } : {}), reasoningEffort: row.reasoning_effort }
+      overrides.set(row.agent_type, { ...overrides.get(row.agent_type), [row.weight as Weight]: route })
+    }
+    return overrides
+  }
+
+  async setRoute(agentType: string, weight: Weight, route: Route, actor: string): Promise<void> {
+    await transaction(this.db, async (tx) => {
+      const before = (await tx.query('SELECT source, model, reasoning_effort FROM agent_routes WHERE agent_type = $1 AND weight = $2', [agentType, weight])).rows[0] ?? null
+      await tx.query(
+        `INSERT INTO agent_routes (agent_type, weight, source, model, reasoning_effort, updated_by) VALUES ($1, $2, $3, $4, $5, $6)
+         ON CONFLICT (agent_type, weight) DO UPDATE SET source = $3, model = $4, reasoning_effort = $5, updated_by = $6, updated_at = now()`,
+        [agentType, weight, route.source, route.model ?? null, route.reasoningEffort, actor])
+      await audit(tx, { actor, action: 'model.set', objectType: 'agent-route', objectId: `${agentType}/${weight}`, before, after: route })
+    })
+  }
+
+  /** Puts a role's weight back to the profile's table. Returns whether there was an override to remove. */
+  async clearRoute(agentType: string, weight: Weight, actor: string): Promise<boolean> {
+    return transaction(this.db, async (tx) => {
+      const removed = await tx.query('DELETE FROM agent_routes WHERE agent_type = $1 AND weight = $2 RETURNING source, model, reasoning_effort', [agentType, weight])
+      if (removed.rowCount) await audit(tx, { actor, action: 'model.reset', objectType: 'agent-route', objectId: `${agentType}/${weight}`, before: removed.rows[0] })
+      return Boolean(removed.rowCount)
+    })
   }
 
   /** What the model runs of each task cost: runs, tokens, time and the latest model, for the Approval box (FR-20). */
@@ -345,18 +403,35 @@ export class OfficeStore {
   /** The brand's latest saved results with the task they belong to, newest first, without their content. */
   async assetList(brandId: string, limit = 40): Promise<AssetListItem[]> {
     const { rows } = await this.db.query(
-      `SELECT a.id, a.task_id, a.kind, a.version, a.created_at, length(a.content)::int AS size, t.title, t.agent_type
+      `SELECT a.id, a.task_id, a.kind, a.version, a.name, a.mime, (a.storage_key IS NOT NULL) AS downloadable, a.created_at, coalesce(a.size_bytes, length(a.content))::int AS size, t.title, t.agent_type
          FROM assets a JOIN tasks t ON t.id = a.task_id AND t.brand_id = a.brand_id
         WHERE a.brand_id = $1 ORDER BY a.created_at DESC, a.version DESC LIMIT $2`, [brandId, limit])
-    return rows.map((row) => ({ id: row.id, taskId: row.task_id, kind: row.kind, version: row.version, size: row.size, title: row.title, agentType: row.agent_type, createdAt: iso(row.created_at)! }))
+    return rows.map((row) => ({ id: row.id, taskId: row.task_id, kind: row.kind, version: row.version, name: row.name ?? null, mime: row.mime ?? null, downloadable: row.downloadable, size: row.size, title: row.title, agentType: row.agent_type, createdAt: iso(row.created_at)! }))
   }
 
   /** One saved result with its content, only when it belongs to the brand. */
-  async asset(brandId: string, assetId: string): Promise<(Asset & { title: string }) | undefined> {
+  async asset(brandId: string, assetId: string): Promise<(Asset & { title: string; name: string | null }) | undefined> {
     const { rows } = await this.db.query(
       `SELECT a.*, t.title FROM assets a JOIN tasks t ON t.id = a.task_id AND t.brand_id = a.brand_id WHERE a.brand_id = $1 AND a.id::text = $2`, [brandId, assetId])
     const row = rows[0]
-    return row ? { id: row.id, taskId: row.task_id, kind: row.kind, version: row.version, content: row.content, createdAt: iso(row.created_at)!, title: row.title } : undefined
+    return row ? { id: row.id, taskId: row.task_id, kind: row.kind, version: row.version, content: row.content, createdAt: iso(row.created_at)!, title: row.title, name: row.name ?? null } : undefined
+  }
+
+  /** A downloadable file's bytes, only when the asset belongs to the brand and has a stored file. */
+  async assetFile(brandId: string, assetId: string): Promise<{ data: Buffer; mime: string; name: string } | undefined> {
+    if (!this.files) return undefined
+    const { rows } = await this.db.query('SELECT name, mime, storage_key FROM assets WHERE brand_id = $1 AND id::text = $2 AND storage_key IS NOT NULL', [brandId, assetId])
+    const row = rows[0]
+    return row ? { data: await this.files.read(row.storage_key), mime: row.mime ?? 'application/octet-stream', name: row.name ?? 'berkas' } : undefined
+  }
+
+  /** The stored files of chat tasks (id and name per task), so a chat can link a file card to its download. */
+  async artifactFiles(brandId: string, taskIds: string[]): Promise<Map<string, Array<{ id: string; name: string; mime: string }>>> {
+    const files = new Map<string, Array<{ id: string; name: string; mime: string }>>()
+    if (taskIds.length === 0) return files
+    const { rows } = await this.db.query(`SELECT id, task_id, name, mime FROM assets WHERE brand_id = $1 AND task_id = ANY($2::uuid[]) AND storage_key IS NOT NULL ORDER BY version`, [brandId, taskIds])
+    for (const row of rows) files.set(row.task_id, [...(files.get(row.task_id) ?? []), { id: row.id, name: row.name, mime: row.mime }])
+    return files
   }
 
   async assets(brandId: string, taskId: string): Promise<Asset[]> {

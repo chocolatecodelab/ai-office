@@ -1741,7 +1741,7 @@ aside.office-panel { background: color-mix(in srgb, var(--surface) 96%, transpar
 .fb-table td { color: var(--text-muted); white-space: nowrap; }
 .fb-table tbody th { font-weight: 400; width: 46%; }
 .fb-name { background: none; border: 0; color: var(--text); cursor: pointer; display: grid; font-family: inherit; font-size: 13px; font-weight: 600; gap: 2px; padding: 0; text-align: left; }
-.fb-name small { color: var(--text-muted); font-family: inherit; font-size: 12px; font-weight: 400; letter-spacing: normal; }
+.fb-name small { -webkit-box-orient: vertical; -webkit-line-clamp: 1; color: var(--text-muted); display: -webkit-box; font-family: inherit; font-size: 12px; font-weight: 400; letter-spacing: normal; overflow: hidden; }
 .fb-version { border: 1px solid var(--border-strong); border-radius: 4px; color: var(--text-muted); font: 11px ui-monospace, monospace; padding: 1px 6px; }
 .fb-version.latest { border-color: var(--accent); color: var(--accent); }
 .fb-preview { max-height: calc(100vh - 24px); overflow: auto; padding: 14px; position: sticky; top: 12px; }
@@ -1756,3 +1756,39 @@ aside.office-panel { background: color-mix(in srgb, var(--surface) 96%, transpar
 .fb-sr { border: 0; clip: rect(0 0 0 0); height: 1px; margin: -1px; overflow: hidden; padding: 0; position: absolute; width: 1px; }
 @media (max-width: 1180px) { .fb { grid-template-columns: 180px minmax(0, 1fr); } .fb-preview { grid-column: 1 / -1; max-height: none; position: static; } }
 @media (max-width: 720px) { .fb { grid-template-columns: minmax(0, 1fr); } .fb-brands { display: flex; overflow-x: auto; position: static; } .fb-brands button { flex: none; } .fb-hide { display: none; } .fb-table tbody th { width: auto; } }
+
+/* Files an agent wrote in a chat reply, shown under its bubble. */
+.chat-file { background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; margin-top: 8px; }
+.chat-file-head { align-items: center; display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 10px; }
+.chat-file-head strong { flex: 1; font-size: 13px; min-width: 0; overflow-wrap: anywhere; }
+.chat-file-head small { color: var(--text-muted); font-family: inherit; letter-spacing: normal; }
+.chat-file-body { border-top: 1px solid var(--border); font: 12px/1.55 ui-monospace, monospace; margin: 0; max-height: 260px; overflow: auto; overflow-wrap: anywhere; padding: 10px; white-space: pre-wrap; }
+
+/* Model settings of an agent role (Agents page). */
+.model-editor { margin-top: 10px; }
+.model-editor summary { color: var(--text-muted); cursor: pointer; font-size: 13px; }
+.model-row { border: 1px solid var(--border); border-radius: 6px; display: grid; gap: 8px; margin: 8px 0 0; padding: 8px 10px; }
+.model-row legend { color: var(--text-dim); font: 11px ui-monospace, monospace; letter-spacing: .05em; padding: 0 4px; text-transform: uppercase; }
+.model-row label { color: var(--text-muted); display: grid; font-size: 12px; gap: 3px; }
+.model-row select, .model-row input { background: var(--surface-3); border: 1px solid var(--border-strong); border-radius: 4px; color: var(--text); font: inherit; font-size: 13px; padding: 5px 7px; }
+.model-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.model-editor button:focus-visible, .model-editor select:focus-visible, .model-editor input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.chat-file-link { border: 1px solid var(--border-strong); border-radius: 4px; color: var(--accent); font-size: 12px; padding: 3px 8px; text-decoration: none; }
+.chat-file-link:hover { background: var(--surface-3); }
+.fb-actions a.refresh-button { text-decoration: none; }
+
+/* Folders filters: type chips with counts, then search, agent, period and sort. */
+.fb-filters { border-bottom: 1px solid var(--border); display: grid; gap: 10px; padding: 10px 12px; }
+.fb-kinds { display: flex; flex-wrap: wrap; gap: 6px; }
+.fb-chip { align-items: center; background: transparent; border: 1px solid var(--border-strong); border-radius: 999px; color: var(--text-muted); cursor: pointer; display: inline-flex; font-family: inherit; font-size: 12px; gap: 6px; padding: 4px 11px; }
+.fb-chip:hover { background: var(--surface-2); color: var(--text); }
+.fb-chip[aria-pressed="true"] { background: var(--surface-2); border-color: var(--accent); color: var(--text); }
+.fb-chip b { color: var(--text-dim); font: 11px ui-monospace, monospace; }
+.fb-controls { align-items: center; display: flex; flex-wrap: wrap; gap: 8px 12px; }
+.fb-controls > :first-child { flex: 1 1 200px; min-width: 160px; }
+.fb-controls label { color: var(--text-muted); display: inline-flex; font-size: 12px; gap: 6px; align-items: center; }
+.fb-controls select { background: var(--surface-3); border: 1px solid var(--border-strong); border-radius: 4px; color: var(--text); font: inherit; font-size: 12.5px; padding: 4px 6px; }
+.fb-controls .fb-count { margin-left: auto; }
+.fb-filters button:focus-visible, .fb-filters select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.fb-toolbar { display: none; }

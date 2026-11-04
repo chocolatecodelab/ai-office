@@ -1,3 +1,6 @@
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import pg from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -6,6 +9,7 @@ import { mockDrive } from '../integrations/index.js'
 import { officeSettings } from '../settings.js'
 import { readBrands, syncBrands } from './brands.js'
 import { OfficeBus } from './bus.js'
+import { localFileStore } from './file-store.js'
 import { EventWorkflow, parseQuestions } from './event-workflow.js'
 import type { HermesClient, RunRequest, RunResult } from './hermes-client.js'
 import { MAX_ATTEMPTS, runTask, type RunnerDeps } from './runner.js'
@@ -43,7 +47,8 @@ describe.skipIf(!available)('office store, runner and event workflow (Postgres)'
   let db: Db
   let store: OfficeStore
   let events: EventWorkflow
-  const deps = (hermes: HermesClient): RunnerDeps => ({
+  let filesDir = ''
+  const deps =(hermes: HermesClient): RunnerDeps => ({
     store, hermes, contextDir, endpoint: () => ({ url: 'http://hermes', key: 'k' }), brandName: async () => 'Official OTCA',
   })
 
@@ -53,10 +58,11 @@ describe.skipIf(!available)('office store, runner and event workflow (Postgres)'
     await migrate(db)
     await syncBrands(db, readBrands(contextDir))
     const bus = new OfficeBus()
-    store = new OfficeStore(db, bus)
+    filesDir = await mkdtemp(join(tmpdir(), 'office-files-'))
+    store = new OfficeStore(db, bus, localFileStore(filesDir))
     events = new EventWorkflow(store, bus, mockDrive())
   })
-  afterAll(async () => { await db?.end() })
+  afterAll(async () => { await db?.end(); if (filesDir) await rm(filesDir, { recursive: true, force: true }) })
 
   it('loads the four brands and their crews from context/', async () => {
     expect((await store.brands()).map((brand) => brand.id)).toEqual(['ciaomanda', 'infojerman', 'jepangkoey', 'otca'])
@@ -197,6 +203,58 @@ describe.skipIf(!available)('office store, runner and event workflow (Postgres)'
     expect((await store.asset('otca', asset.id))?.content.length).toBeGreaterThan(0)
     expect(await store.asset('infojerman', asset.id)).toBeUndefined()
     expect(await store.assetList('infojerman')).toEqual([])
+  })
+
+  it('saves the files a chat reply carries as assets of their own, and drops unsafe ones', async () => {
+    const task = await store.createTask('otca', { agentType: 'manager', kind: 'konten.chat', title: 'af-1', brief: 'x', createdBy: 'uji' })
+    const reply = 'Ini berkasnya.\n~~~file:rencana.md\n# Rencana\n~~~\n~~~file:../../jahat.exe\nx\n~~~'
+    await runTask(deps(scriptedHermes([{ output: reply }])), 'otca', task.id)
+    expect((await store.assets('otca', task.id)).map((asset) => asset.kind).sort()).toEqual(['artifact', 'konten.chat'])
+    const listed = (await store.assetList('otca', 50)).filter((item) => item.taskId === task.id)
+    expect(listed.find((item) => item.kind === 'artifact')).toMatchObject({ name: 'rencana.md' })
+    expect(listed.some((item) => item.name === 'jahat.exe')).toBe(false)
+    expect(listed.find((item) => item.kind === 'konten.chat')?.name).toBeNull()
+  })
+
+  it('renders a *.pdf file of a chat reply into the file store, and serves it to its own brand only', async () => {
+    const task = await store.createTask('otca', { agentType: 'manager', kind: 'konten.chat', title: 'pdf-1', brief: 'x', createdBy: 'uji' })
+    const reply = 'Ringkasan siap.\n~~~file:ringkasan.pdf\n# Ringkasan\n\n- poin satu\n- poin dua\n~~~\n~~~file:catatan.md\n# Catatan\n~~~'
+    await runTask(deps(scriptedHermes([{ output: reply }])), 'otca', task.id)
+
+    const listed = (await store.assetList('otca', 50)).filter((item) => item.taskId === task.id)
+    const pdf = listed.find((item) => item.name === 'ringkasan.pdf')
+    expect(pdf).toMatchObject({ mime: 'application/pdf', downloadable: true, kind: 'artifact' })
+    expect(listed.find((item) => item.name === 'catatan.md')).toMatchObject({ mime: null, downloadable: false })
+
+    const file = await store.assetFile('otca', pdf!.id)
+    expect(file?.data.subarray(0, 5).toString()).toBe('%PDF-')
+    expect(file?.name).toBe('ringkasan.pdf')
+    expect(pdf!.size).toBe(file?.data.length)
+    expect((await store.asset('otca', pdf!.id))?.content).toContain('# Ringkasan') // the Markdown source is kept
+    expect(await store.assetFile('infojerman', pdf!.id)).toBeUndefined()
+    expect(await store.assetFile('otca', listed.find((item) => item.name === 'catatan.md')!.id)).toBeUndefined()
+    expect([...(await store.artifactFiles('otca', [task.id])).get(task.id) ?? []].map((item) => item.name)).toEqual(['ringkasan.pdf'])
+    expect((await store.artifactFiles('infojerman', [task.id])).size).toBe(0)
+  })
+
+  it('runs an agent on the model set for it, and goes back to the default after a reset', async () => {
+    const make = (title: string) => store.createTask('otca', { agentType: 'digital-marketing', kind: 'konten.chat', title, brief: 'x', createdBy: 'uji' })
+    await store.setRoute('digital-marketing', 'simple', { source: 'codex', model: 'gpt-uji', reasoningEffort: 'high' }, 'uji')
+    expect((await store.routeOverrides()).get('digital-marketing')?.simple).toEqual({ source: 'codex', model: 'gpt-uji', reasoningEffort: 'high' })
+
+    const changed = scriptedHermes([{ output: 'a' }])
+    await runTask(deps(changed), 'otca', (await make('rt-1')).id)
+    expect(changed.requests[0]).toMatchObject({ model: 'gpt-uji', reasoningEffort: 'high' })
+    expect(changed.requests[0].provider).toBeUndefined()
+
+    await store.setRoute('digital-marketing', 'simple', { source: 'codex', reasoningEffort: 'low' }, 'uji') // an update, not a second row
+    expect(await store.clearRoute('digital-marketing', 'simple', 'uji')).toBe(true)
+    expect(await store.clearRoute('digital-marketing', 'simple', 'uji')).toBe(false)
+    const reset = scriptedHermes([{ output: 'b' }])
+    await runTask(deps(reset), 'otca', (await make('rt-2')).id)
+    expect(reset.requests[0].model).toBeUndefined()
+    expect(reset.requests[0].reasoningEffort).toBe('low')
+    expect((await store.routeOverrides()).has('digital-marketing')).toBe(false)
   })
 
   it('parks a run that returns after the kill switch was pulled, without filing its result', async () => {

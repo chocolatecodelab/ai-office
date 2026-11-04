@@ -29,6 +29,8 @@ export interface OfficeSettings {
   redisUrl: string
   /** Where the api reaches LiteLLM for its health check; the local Compose port by default. */
   litellmUrl: string
+  /** Where binary results are written (office/file-store.ts); data/files in the repo by default, which git ignores. */
+  filesDir: string
   hermes(brand: string): HermesEndpoint | undefined
   langfuse?: LangfuseConfig
   /** Model table for the agents: dev runs everything on Codex, prod adds the Claude pools (server/office/model-routes.ts). */
@@ -55,6 +57,7 @@ export function officeSettings(env: NodeJS.ProcessEnv = process.env, root = REPO
     databaseUrl: env.OFFICE_DATABASE_URL || localDatabase,
     redisUrl: env.OFFICE_REDIS_URL || 'redis://127.0.0.1:16379',
     litellmUrl: env.LITELLM_URL || 'http://127.0.0.1:14000',
+    filesDir: env.RUANG_FILES_DIR || join(root, 'data', 'files'),
     langfuse: langfuseConfig(env, envDir),
     engineProfile: env.ENGINE_PROFILE === 'prod' ? 'prod' : 'dev',
     hermes(brand) {

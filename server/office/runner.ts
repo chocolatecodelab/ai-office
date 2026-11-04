@@ -45,7 +45,7 @@ export async function runTask(deps: RunnerDeps, brandId: string, taskId: string)
 
   const attempt = task.attempts + 1
   const running = await store.transition(brandId, taskId, 'running', { actor: `agent:${task.agentType}`, reason: `percobaan ${attempt}`, patch: { attempts: attempt, started_at: new Date().toISOString(), retry_at: null } })
-  const route = routeFor(task, deps.profile)
+  const route = routeFor(task, deps.profile, (await store.routeOverrides()).get(task.agentType))
   const fail = async (message: string, quota: boolean): Promise<RunOutcome> => {
     if (quota) {
       const retryAt = new Date(Date.now() + QUOTA_WAIT_MS)

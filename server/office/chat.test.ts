@@ -13,7 +13,7 @@ it('keeps chat context within the agent and finishes the reply without approval'
   const submitForApproval=vi.fn()
   const completeChat=vi.fn()
   const run=vi.fn(async () => ({runId:'r',status:'completed' as const,output:'Jawaban terbaru',model:'test',inputTokens:1,outputTokens:1}))
-  const store={task:async()=>task,isPaused:async()=>false,transition:async()=>task,revisionNotes:async()=>[],tasks,submitForApproval,completeChat} as unknown as OfficeStore
+  const store={task:async()=>task,isPaused:async()=>false,transition:async()=>task,revisionNotes:async()=>[],routeOverrides:async()=>new Map(),tasks,submitForApproval,completeChat} as unknown as OfficeStore
   await runTask({store,hermes:{run},endpoint:()=>({url:'http://mock',key:'test'}),contextDir:fileURLToPath(new URL('../../context',import.meta.url)),brandName:async()=> 'Official OTCA'},'otca','new')
   expect(tasks).toHaveBeenCalledWith('otca')
   const input=(run.mock.calls[0] as unknown as [unknown,{input:string}])[1].input

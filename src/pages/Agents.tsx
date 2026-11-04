@@ -1,17 +1,13 @@
 import { useState } from 'react'
 import { FLOOR_ORDER } from '../office3d/building.ts'
-import { AGENT_NAMES, AGENT_STATUS_LABELS, officeRequest, type AgentRoute, type OfficeAgent, type OfficeBrand, type OfficeModels } from '../office-api.ts'
+import { ModelEditor } from '../components/ModelEditor.tsx'
+import { routeLabel } from '../model-labels.ts'
+import { AGENT_NAMES, AGENT_STATUS_LABELS, officeRequest, type OfficeAgent, type OfficeBrand, type OfficeModels, type Weight } from '../office-api.ts'
 import { usePolling } from '../polling.ts'
 import { EmptyState, LoadingState, PageTitle } from '../ui.tsx'
 import { PixelCharacter } from './OfficeDetails.tsx'
 
-const CLAUDE_NAMES = { cepat: 'Haiku 5.5', final: 'Sonnet 5.5', video: 'Opus 5.5' }
-
-/** One route as staff read it: Codex with its reasoning level, or a Claude model through LiteLLM. */
-function routeLabel(route: AgentRoute): string {
-  if (route.source === 'codex') return `Codex · gpt-6-sol, reasoning ${route.reasoningEffort === 'high' ? 'tinggi' : 'rendah'}`
-  return `${route.model ? CLAUDE_NAMES[route.model] : 'Claude'} · LiteLLM`
-}
+const WEIGHT_LABELS: Record<Weight, string> = { simple: 'Sederhana', complex: 'Kompleks', urgent: 'Mendesak' }
 
 /** The agents of every brand, grouped by brand, with the model each one uses (server/office/model-routes.ts) and the kill switch (FR-26). */
 export function Agents() {
@@ -44,28 +40,25 @@ export function Agents() {
     {error && <p className="form-error" role="alert">{error}</p>}
     {brandsByFloor.map((brand) => <section className="agent-brand" key={brand.id}>
       <h2 style={{ color: brand.color }}>{brand.name}{brand.paused ? ' · dijeda' : ''} <button type="button" className="refresh-button" disabled={busy} onClick={() => void killSwitch(brand, undefined, !brand.paused)}>{brand.paused ? 'Lanjutkan brand' : 'Jeda brand'}</button></h2>
-      <section className="agent-grid">{brand.agents.map((agent) => <AgentCard agent={agent} brandPaused={brand.paused} busy={busy} models={table} onToggle={(paused) => void killSwitch(brand, agent.agentType, paused)} key={agent.agentType}/>)}</section>
+      <section className="agent-grid">{brand.agents.map((agent) => <AgentCard agent={agent} brandPaused={brand.paused} busy={busy} models={table} onToggle={(paused) => void killSwitch(brand, agent.agentType, paused)} onModelChanged={models.refresh} key={agent.agentType}/>)}</section>
     </section>)}
   </>
 }
 
-function AgentCard({ agent, brandPaused, busy, models, onToggle }: { agent: OfficeAgent; brandPaused: boolean; busy: boolean; models: OfficeModels | undefined; onToggle: (paused: boolean) => void }) {
+function AgentCard({ agent, brandPaused, busy, models, onToggle, onModelChanged }: { agent: OfficeAgent; brandPaused: boolean; busy: boolean; models: OfficeModels | undefined; onToggle: (paused: boolean) => void; onModelChanged: () => void }) {
   const routes = models?.agents.find((item) => item.agentType === agent.agentType)
+  const weights: Weight[] = models?.profile === 'prod' ? ['simple', 'complex', 'urgent'] : ['simple', 'complex']
   return <article className="agent-card">
     <span className="folder-glyph" aria-hidden="true"><PixelCharacter agent={agent.agentType}/></span>
     <div className="agent-card-body">
       <h3>{AGENT_NAMES[agent.agentType] ?? agent.agentType}</h3>
       <dl>
         {!routes && <div><dt>Model</dt><dd>—</dd></div>}
-        {routes && models?.profile === 'dev' && <div><dt>Model</dt><dd>Codex · gpt-6-sol, reasoning sesuai bobot tugas</dd></div>}
-        {routes && models?.profile === 'prod' && <>
-          <div><dt>Sederhana</dt><dd>{routeLabel(routes.simple)}</dd></div>
-          <div><dt>Kompleks</dt><dd>{routeLabel(routes.complex)}</dd></div>
-          <div><dt>Mendesak</dt><dd>{routeLabel(routes.urgent)}</dd></div>
-        </>}
+        {routes && weights.map((weight) => <div key={weight}><dt>{WEIGHT_LABELS[weight]}</dt><dd>{routeLabel(routes[weight])}{routes.overridden.includes(weight) ? ' · diubah' : ''}</dd></div>)}
         <div><dt>Status</dt><dd>{agent.active ? AGENT_STATUS_LABELS[agent.status] : 'Nonaktif'}</dd></div>
         <div><dt>Tugas</dt><dd>{agent.currentTask ?? '—'}</dd></div>
       </dl>
+      {routes && models && <ModelEditor entry={routes} models={models} onChanged={onModelChanged}/>}
       {agent.active && <button type="button" className="refresh-button" disabled={busy || brandPaused} title={brandPaused ? 'Brand sedang dijeda' : undefined} onClick={() => onToggle(!agent.paused)}>{agent.paused ? 'Lanjutkan' : 'Jeda'}</button>}
     </div>
   </article>
