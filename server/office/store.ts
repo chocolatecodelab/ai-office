@@ -1,4 +1,5 @@
 import { agentContextFiles, findContextDir } from '../otca-context.js'
+import type { IntegrationMode } from '../integrations/index.js'
 import { NOTE_LIMITS, type AgentNote, type NoteInput } from './agent-notes.js'
 import { extractArtifacts } from './artifacts.js'
 import type { FileStore } from './file-store.js'
@@ -430,6 +431,24 @@ export class OfficeStore {
       const note = toNote(removed.rows[0])
       await audit(tx, { actor, action: 'note.delete', objectType: 'agent-note', objectId: id, brandId, before: { kind: note.kind, title: note.title, body: note.body, agentType: note.agentType, active: note.active } })
       return true
+    })
+  }
+
+  /** The mode each brand asked for, per service: brand id → service → mode. */
+  async integrationModes(): Promise<Map<string, Map<string, IntegrationMode>>> {
+    const { rows } = await this.db.query('SELECT brand_id, service, mode FROM integration_modes')
+    const modes = new Map<string, Map<string, IntegrationMode>>()
+    for (const row of rows) modes.set(row.brand_id, (modes.get(row.brand_id) ?? new Map()).set(row.service, row.mode))
+    return modes
+  }
+
+  async setIntegrationMode(brandId: string, service: string, mode: IntegrationMode, actor: string): Promise<void> {
+    await transaction(this.db, async (tx) => {
+      const before = (await tx.query('SELECT mode FROM integration_modes WHERE brand_id = $1 AND service = $2', [brandId, service])).rows[0]?.mode ?? null
+      await tx.query(
+        `INSERT INTO integration_modes (brand_id, service, mode, updated_by) VALUES ($1, $2, $3, $4)
+         ON CONFLICT (brand_id, service) DO UPDATE SET mode = $3, updated_by = $4, updated_at = now()`, [brandId, service, mode, actor])
+      await audit(tx, { actor, action: 'integration.mode', objectType: 'integration', objectId: service, brandId, before: { mode: before }, after: { mode } })
     })
   }
 

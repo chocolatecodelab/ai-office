@@ -2,6 +2,7 @@ import type { Server } from 'node:http'
 import express, { type Request, type Response, type Router } from 'express'
 import { WebSocketServer } from 'ws'
 import { createDb, migrate, type Db } from '../db/index.js'
+import { SERVICES, connectionState, effectiveMode, isMode } from '../integrations/catalog.js'
 import { integrationStatuses, mockDrive, type Integrations } from '../integrations/index.js'
 import { agentContextFiles, findContextDir } from '../otca-context.js'
 import { officeSettings, type OfficeSettings } from '../settings.js'
@@ -254,6 +255,33 @@ export function officeRouter(services: Promise<OfficeServices>): Router {
       gateways: brands.map((brand) => ({ brandId: brand.id, name: brand.name, configured: Boolean(office.settings?.hermes(brand.id)) })),
       langfuse: { configured: Boolean(office.settings?.langfuse) },
     }
+  }))
+
+  // Connection status of every outside service and the mode each brand asked for. Only whether credentials exist is
+  // reported, never their values; they are filled in infra/env/ and re-read on every call (integrations/catalog.ts).
+  router.get('/integrations', handle(async (office) => {
+    const [brands, modes] = await Promise.all([office.store.brands(), office.store.integrationModes()])
+    return {
+      brands: brands.map((brand) => ({ id: brand.id, name: brand.name })),
+      services: SERVICES.map((def) => {
+        const { connected, missing } = connectionState(def, process.env, office.settings?.envDir)
+        return {
+          service: def.service, label: def.label, purpose: def.purpose, level: def.level, auth: def.auth, vars: def.vars, file: def.file, howTo: def.howTo,
+          adapterReady: def.adapterReady, connected, missing,
+          modes: Object.fromEntries(brands.map((brand) => { const requested = modes.get(brand.id)?.get(def.service) ?? 'mock'; return [brand.id, { requested, effective: effectiveMode(requested, connected, def.adapterReady) }] })),
+        }
+      }),
+    }
+  }))
+  router.put('/brands/:brand/integrations/:service', handle(async (office, request) => {
+    const brand = await brandOf(office, request)
+    const def = SERVICES.find((item) => item.service === request.params.service)
+    if (!def) throw new Error('Layanan tidak dikenal.')
+    const mode = body(request).mode
+    if (!isMode(mode)) throw new Error('Mode harus mock, sandbox, atau live.')
+    if (mode !== 'mock' && !connectionState(def, process.env, office.settings?.envDir).connected) throw new Error(`${def.label} belum terhubung; lengkapi kredensialnya dulu, sampai itu hanya mode mock.`)
+    await office.store.setIntegrationMode(brand, def.service, mode, LOCAL_ACTOR)
+    return { brand, service: def.service, requested: mode }
   }))
 
   router.get('/brands', handle(async (office) => Promise.all((await office.store.brands()).map(async (brand) => {

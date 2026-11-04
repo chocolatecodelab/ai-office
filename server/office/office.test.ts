@@ -306,6 +306,17 @@ describe.skipIf(!available)('office store, runner and event workflow (Postgres)'
     expect(actions).toEqual(expect.arrayContaining(['note.create', 'note.update', 'note.delete']))
   })
 
+  it('keeps the integration mode each brand asked for, per service, and audits the change', async () => {
+    await store.setIntegrationMode('otca', 'trello', 'sandbox', 'uji')
+    await store.setIntegrationMode('otca', 'trello', 'live', 'uji') // an update, not a second row
+    await store.setIntegrationMode('infojerman', 'trello', 'mock', 'uji')
+    const modes = await store.integrationModes()
+    expect(modes.get('otca')?.get('trello')).toBe('live')
+    expect(modes.get('infojerman')?.get('trello')).toBe('mock')
+    expect(modes.get('ciaomanda')?.has('trello') ?? false).toBe(false)
+    expect((await store.activity('otca', 100)).some((entry) => entry.action === 'integration.mode')).toBe(true)
+  })
+
   it('parks a run that returns after the kill switch was pulled, without filing its result', async () => {
     const task = await store.createTask('otca', { agentType: 'manager', kind: 'konten.chat', title: 'ks-4', brief: 'x', createdBy: 'uji' })
     const hermes: HermesClient = {

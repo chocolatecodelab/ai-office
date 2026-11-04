@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from 'react'
+import { IntegrationsPanel } from '../components/IntegrationsPanel.tsx'
 import { accessRequest, downloadCode, generateCode, type AccessStatus } from '../access.ts'
 import { formatDateTime } from '../format.ts'
 import { formatCost } from '../usage.ts'
@@ -92,14 +93,13 @@ function TurnOff({ onDone, onCancel }: { onDone: (status: AccessStatus) => void;
 }
 
 const ALERT_TEXT: Record<OfficeSettingsView['pools'][number]['alert'], string> = { ok: 'Aman', '50': 'Sudah 50%', '80': 'Sudah 80%', over: 'Melewati budget' }
-const MODE_BADGE: Record<OfficeSettingsView['integrations'][number]['mode'], string> = { mock: 'muted', sandbox: '', live: 'good' }
 
 /** Office setup as blueprint describes it: access and roles, integration modes, LiteLLM pools, and gateways. Read only. */
 function OfficeSetup() {
   const setup = usePolling<OfficeSettingsView>('/api/office/settings', 60_000)
   if (setup.status === 'pending') return <section className="card settings-card"><LoadingState message="Memuat pengaturan kantor..."/></section>
   if (setup.status === 'failed') return <section className="card settings-card"><EmptyState title="Belum tersedia">Pengaturan kantor belum bisa dibaca. {setup.message}</EmptyState></section>
-  const { access, roles, integrations, pools, gateways, langfuse } = setup.data
+  const { access, roles, pools, gateways, langfuse } = setup.data
   return <>
     <section className="card settings-card" aria-labelledby="office-access">
       <div className="settings-head"><div><p className="eyebrow">AKSES</p><h2 id="office-access">Akses dan peran</h2></div><span className="badge muted">{access.sso ? 'SSO aktif' : 'Belum SSO'}</span></div>
@@ -108,9 +108,8 @@ function OfficeSetup() {
       <ul className="role-list">{roles.map((role) => <li key={role.id}><strong>{role.label}</strong>{role.note && <span className="muted"> · {role.note}</span>}</li>)}</ul>
     </section>
     <section className="card settings-card" aria-labelledby="office-integrations">
-      <div className="settings-head"><div><p className="eyebrow">INTEGRASI</p><h2 id="office-integrations">Mode integrasi</h2></div></div>
-      <p className="small-note">Setiap adapter berjalan sebagai mock, sandbox, atau live (FR-40). Tanpa kredensial, adapter tetap mock.</p>
-      <ul className="role-list">{integrations.map((item) => <li key={item.service}><strong>{item.label}</strong> <span className={`badge ${MODE_BADGE[item.mode]}`}>{item.mode}</span>{item.note && <span className="muted"> · {item.note}</span>}</li>)}</ul>
+      <div className="settings-head"><div><p className="eyebrow">INTEGRASI</p><h2 id="office-integrations">Integrasi</h2></div></div>
+      <IntegrationsPanel/>
     </section>
     <section className="card settings-card" aria-labelledby="office-pools">
       <div className="settings-head"><div><p className="eyebrow">BUDGET</p><h2 id="office-pools">Pool LiteLLM</h2></div></div>

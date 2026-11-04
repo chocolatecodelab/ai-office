@@ -35,6 +35,14 @@ export interface SpeakerQuestion { id: string; position: number; speaker: string
 export interface EventDetail { event: OfficeEvent; stages: EventStage[]; questions: SpeakerQuestion[] }
 
 export interface IntegrationStatus { service: string; label: string; mode: 'mock' | 'sandbox' | 'live'; note: string }
+export type IntegrationMode = 'mock' | 'sandbox' | 'live'
+export interface OfficeIntegrations {
+  brands: Array<{ id: string; name: string }>
+  services: Array<{
+    service: string; label: string; purpose: string; level: string; auth: 'oauth' | 'api-key'; vars: string[]; file: string; howTo: string
+    adapterReady: boolean; connected: boolean; missing: string[]; modes: Record<string, { requested: IntegrationMode; effective: IntegrationMode }>
+  }>
+}
 export interface OfficeStatus { integrations: IntegrationStatus[] }
 
 export interface OfficeSettingsView {
