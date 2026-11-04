@@ -30,6 +30,17 @@ installAccess(app)
 // Optional profile lock (off by default): a PIN withholds the private data of chosen agents.
 const privacyOf = installProfileLock(app)
 
+// The routes of the retired Claude runtime read folders and write agent memory and tasks without a login,
+// and the blueprint removes them (docs/PLAN.md, "Dihapus"). They answer 410 unless RUANG_LEGACY_API=1.
+// The read-only snapshots the pages still poll (/api/dashboard, /api/runtime, ...) are not affected.
+const LEGACY_PREFIXES = ['/api/claude', '/api/chat', '/api/team', '/api/calendar', '/api/tasks', '/api/memory', '/api/agents', '/api/folders']
+const LEGACY_SNAPSHOTS = new Set(['/api/calendar', '/api/tasks'])
+app.use((request, response, next) => {
+  const legacy = LEGACY_PREFIXES.some((prefix) => request.path === prefix || request.path.startsWith(`${prefix}/`))
+  if (!legacy || process.env.RUANG_LEGACY_API === '1' || (request.method === 'GET' && LEGACY_SNAPSHOTS.has(request.path))) { next(); return }
+  response.status(410).json({ error: 'Rute runtime Claude lama dimatikan. Pakai /api/office, atau setel RUANG_LEGACY_API=1 sementara.' })
+})
+
 // Claude AI Configuration & Chat Routes
 app.get('/api/claude/config', (_request, response) => {
   response.json(claudeService.getConfig())
