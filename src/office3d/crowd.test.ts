@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { createBuilding, FLOOR_HEIGHT, floorAt, LIFT, LIFT_LANE_X, route, type BrandInput, type BuildingLayout, type Vec3 } from './building.ts'
+import { createBuilding, FLOOR_HEIGHT, floorAt, LIFT, route, type BrandInput, type BuildingLayout, type Vec3 } from './building.ts'
 import { LiftQueue } from './lift-queue.ts'
+import { followingStep } from './walking-traffic.ts'
 import { nextVisits, type Visit } from './roaming.ts'
 import type { OfficeAgent, OfficeBrand } from '../office-api.ts'
 
@@ -21,14 +22,14 @@ const CREW: BrandInput[] = [
 const WALK_SPEED = 1.6 // metres per second
 const LIFT_SPEED = FLOOR_HEIGHT // one floor per second
 const DT = 0.1
-const QUEUE_PITCH = 0.48 // metres between queued passengers, as Office3D places them
 // Cabin spots riders stand on, as Office3D offsets them; passengers keep their spot when they step out.
 const CABIN_SLOTS: [number, number][] = [[-0.5, -0.45], [0.5, -0.45], [-0.5, 0.45], [0.5, 0.45], [0, 0]]
 const MIN_SEPARATION = 0.5 // centre to centre, about one shoulder width
 const HORIZON_S = 900
 const MIN_VISITS = 3
 const MAX_CLOSE_S = 5 // longest a pair may stay within MIN_SEPARATION before it counts as stacked
-const SEEDS = [7, 42, 2026]
+const SEEDS = [7, 42, 2026, 19, 73, 1234, 4096]
+const point=([x,y,z]:Vec3)=>({x,y,z})
 
 /** mulberry32: a small generator whose nearby seeds give unrelated sequences. */
 function rng(seed: number) {
@@ -48,7 +49,7 @@ function crewBrands(): OfficeBrand[] {
   }))
 }
 
-interface Walker { id: string; position: Vec3; path: Vec3[]; next: number; target?: string; riding: boolean; queued: boolean; waitingSince?: number }
+interface Walker { id: string; position: Vec3; path: Vec3[]; next: number; target?: string; riding: boolean; queued: boolean; alighting?:boolean; waitingSince?: number }
 
 function simulate(layout: BuildingLayout, seed: number) {
   const random = rng(seed)
@@ -59,7 +60,7 @@ function simulate(layout: BuildingLayout, seed: number) {
   const walkers = new Map<string, Walker>()
   // Each agent flips between idle and working, which sends it to its desk and back.
   const flipAt = new Map(agents.map((agent) => [idOf(agent), 30 + random() * 90]))
-  const stats = { trips: 0, maxAboard: 0, longestWait: 0, minGap: Infinity, minGapAt: '', closeEpisodes: 0, longestClose: 0 }
+  const stats = { trips: 0, maxAboard: 0, longestWait: 0, minGap: Infinity, minGapAt: '', closeEpisodes: 0, longestClose: 0, longestCloseAt: '' }
   const close = new Map<string, number>()
   let stuck = false
   let elapsed = 0
@@ -97,6 +98,10 @@ function simulate(layout: BuildingLayout, seed: number) {
         arrive(walker.id, visit.spot.key)
         continue
       }
+      if(walker.alighting){
+        if(!lift.canExit(walker.id,t))continue
+        walker.alighting=false;lift.release(walker.id)
+      }
       const here = floorAt(walker.position[1])
       const there = floorAt(target[1])
       if (here !== there && !walker.riding) {
@@ -123,27 +128,28 @@ function simulate(layout: BuildingLayout, seed: number) {
           const [slotX, slotZ] = CABIN_SLOTS[lift.slot(walker.id)]
           walker.position = [LIFT.x + slotX, target[1], LIFT.z + slotZ]
           walker.riding = false
-          lift.release(walker.id)
+          walker.alighting=true
           stats.trips += 1
           walker.next += 1
         }
         continue
       }
       const dx = target[0] - walker.position[0]
+      const dy = target[1] - walker.position[1]
       const dz = target[2] - walker.position[2]
-      const distance = Math.hypot(dx, dz)
-      const step = WALK_SPEED * DT
+      const distance = Math.hypot(dx, dy, dz)
+      const step = followingStep(walker.id,point(walker.position),point(target),WALK_SPEED*DT,[...walkers.values()].map(other=>({id:other.id,position:point(other.position),target:!other.queued && other.path[other.next]?point(other.path[other.next]):undefined,insideLift:lift.has(other.id)})))
       if (distance <= step) {
-        walker.position = [target[0], walker.position[1], target[2]]
+        walker.position = [...target]
         walker.next += 1
       } else {
-        walker.position = [walker.position[0] + (dx / distance) * step, walker.position[1], walker.position[2] + (dz / distance) * step]
+        walker.position = [walker.position[0] + (dx / distance) * step, walker.position[1] + (dy / distance) * step, walker.position[2] + (dz / distance) * step]
       }
       if (walker.waitingSince !== undefined && t - walker.waitingSince > 120) stuck = true
     }
     // Queue spots move forward when the head boards, so place them after every decision this tick.
     for (const walker of walkers.values()) {
-      if (walker.queued) walker.position = [LIFT_LANE_X, walker.position[1], LIFT.z + QUEUE_PITCH * (lift.rank(walker.id) + 1)]
+      if (walker.queued) walker.position = lift.waitingPosition(walker.id,walker.position[1])
     }
 
     const onFoot = [...walkers.values()].filter((walker) => !walker.riding && !lift.has(walker.id))
@@ -161,7 +167,7 @@ function simulate(layout: BuildingLayout, seed: number) {
     // Track how long each pair stays within MIN_SEPARATION of each other.
     for (const [key, since] of close) {
       if (crowded.has(key)) continue
-      stats.longestClose = Math.max(stats.longestClose, t - since)
+      if(t-since>stats.longestClose){stats.longestClose=t-since;stats.longestCloseAt=`${key} ${since.toFixed(1)}–${t.toFixed(1)}s ${key.split('|').map(id=>JSON.stringify(walkers.get(id)?.position)).join(' / ')}`}
       close.delete(key)
     }
     for (const key of crowded) if (!close.has(key)) {
@@ -180,7 +186,7 @@ describe('K4 crowd check: full crew, one lift', () => {
 
   for (const run of runs) {
     it(`seed ${run.seed}: everyone keeps roaming, the lift is never overloaded, nobody waits forever`, () => {
-      console.info(`[crowd seed ${run.seed}] ${run.agents} agen · kunjungan ${run.totalVisits} · tiap agen minimal ${run.minVisits} kunjungan · naik lift ${run.stats.trips}× · penumpang maks ${run.stats.maxAboard} · tunggu lift terlama ${run.stats.longestWait.toFixed(1)} s · jarak terdekat ${run.stats.minGap.toFixed(2)} m (${run.stats.minGapAt}) · berdekatan <0,5 m: ${run.stats.closeEpisodes}× · terlama ${run.stats.longestClose.toFixed(1)} s`)
+      console.info(`[crowd seed ${run.seed}] ${run.agents} agen · kunjungan ${run.totalVisits} · tiap agen minimal ${run.minVisits} kunjungan · naik lift ${run.stats.trips}× · penumpang maks ${run.stats.maxAboard} · tunggu lift terlama ${run.stats.longestWait.toFixed(1)} s · jarak terdekat ${run.stats.minGap.toFixed(2)} m (${run.stats.minGapAt}) · berdekatan <0,5 m: ${run.stats.closeEpisodes}× · terlama ${run.stats.longestClose.toFixed(1)} s (${run.stats.longestCloseAt})`)
       expect(run.stuck).toBe(false)
       expect(run.stats.maxAboard).toBeLessThanOrEqual(5)
       expect(run.stats.trips).toBeGreaterThan(0)
@@ -188,10 +194,7 @@ describe('K4 crowd check: full crew, one lift', () => {
     })
   }
 
-  // Known gap: agents that ride the lift together and head the same way walk one identical route, so
-  // they stack until their routes split. The check stays in the suite as it.fails until the scene gives
-  // them room; remove .fails once the test passes.
-  it.fails('no pair stays stacked: within 0.5 m for more than 5 s on the same floor', () => {
+  it('no pair stays stacked: within 0.5 m for more than 5 s on the same floor', () => {
     for (const run of runs) expect(run.stats.longestClose, `seed ${run.seed}`).toBeLessThanOrEqual(MAX_CLOSE_S)
   })
 })

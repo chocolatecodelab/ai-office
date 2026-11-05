@@ -2,7 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { IntegrationsPanel } from '../components/IntegrationsPanel.tsx'
 import { accessRequest, downloadCode, generateCode, type AccessStatus } from '../access.ts'
 import { formatDateTime } from '../format.ts'
-import { formatCost } from '../usage.ts'
+import { formatCost, formatRupiah, USD_TO_IDR } from '../usage.ts'
 import { type OfficeSettingsView } from '../office-api.ts'
 import { usePolling } from '../polling.ts'
 import { EmptyState, LoadingState, PageTitle } from '../ui.tsx'
@@ -105,7 +105,7 @@ function OfficeSetup() {
       <div className="settings-head"><div><p className="eyebrow">AKSES</p><h2 id="office-access">Akses dan peran</h2></div><span className="badge muted">{access.sso ? 'SSO aktif' : 'Belum SSO'}</span></div>
       <p className="muted">{access.note}</p>
       <p className="small-note">Aktor saat ini: {access.actor}</p>
-      <ul className="role-list">{roles.map((role) => <li key={role.id}><strong>{role.label}</strong>{role.note && <span className="muted"> · {role.note}</span>}</li>)}</ul>
+      <details className="settings-role-details"><summary>Daftar peran · {roles.length} peran{!access.sso ? ' · akses berbasis peran belum aktif' : ''}</summary><ul className="role-catalog">{roles.map(role=><li key={role.id}><strong>{role.label}</strong>{role.note && <span>{role.note}</span>}</li>)}</ul></details>
     </section>
     <section className="card settings-card" aria-labelledby="office-integrations">
       <div className="settings-head"><div><p className="eyebrow">INTEGRASI</p><h2 id="office-integrations">Integrasi</h2></div></div>
@@ -114,14 +114,15 @@ function OfficeSetup() {
     <section className="card settings-card" aria-labelledby="office-pools">
       <div className="settings-head"><div><p className="eyebrow">BUDGET</p><h2 id="office-pools">Pool LiteLLM</h2></div></div>
       <p className="small-note">Pemakaian 30 hari dari LiteLLM. Budget hanya diubah di LiteLLM, tidak dari halaman ini.</p>
-      <ul className="role-list">{pools.map((pool) => <li key={pool.id}>
-        <strong>{pool.label}</strong> <span className="muted">· {pool.models.join(', ')}</span>
-        <div><progress max={pool.budgetUsd} value={Math.min(pool.spentUsd, pool.budgetUsd)}/> {formatCost(pool.spentUsd)} dari {formatCost(pool.budgetUsd)} · <span className={`badge ${pool.alert === 'ok' ? 'muted' : pool.alert === 'over' ? 'danger' : 'good'}`}>{ALERT_TEXT[pool.alert]}</span></div>
+      <p className="small-note">Estimasi rupiah memakai kurs tetap US$1 = Rp{USD_TO_IDR.toLocaleString('id-ID')}.</p>
+      <ul className="pool-catalog">{pools.map((pool) => <li key={pool.id}>
+        <div className="pool-heading"><strong>{pool.label}</strong><span className={`badge ${pool.alert === 'ok' ? 'muted' : pool.alert === 'over' ? 'danger' : 'good'}`}>{ALERT_TEXT[pool.alert]}</span></div><span className="muted">{pool.models.join(', ')}</span>
+        <progress aria-label={`Pemakaian budget ${pool.label}`} max={pool.budgetUsd || 1} value={Math.min(pool.spentUsd, pool.budgetUsd)}/><p>{formatCost(pool.spentUsd)} <span className="muted">dari {formatCost(pool.budgetUsd)}</span></p><small>≈ {formatRupiah(pool.spentUsd)} dari {formatRupiah(pool.budgetUsd)}</small>
       </li>)}</ul>
     </section>
     <section className="card settings-card" aria-labelledby="office-gateways">
       <div className="settings-head"><div><p className="eyebrow">GATEWAY</p><h2 id="office-gateways">Hermes dan Langfuse</h2></div></div>
-      <ul className="role-list">{gateways.map((gateway) => <li key={gateway.brandId}><strong>Hermes · {gateway.name}</strong> <span className={`badge ${gateway.configured ? 'good' : 'muted'}`}>{gateway.configured ? 'Terhubung' : 'Belum'}</span></li>)}
+      <ul className="gateway-catalog">{gateways.map((gateway) => <li key={gateway.brandId}><strong>Hermes · {gateway.name}</strong> <span className={`badge ${gateway.configured ? 'good' : 'muted'}`}>{gateway.configured ? 'Terhubung' : 'Belum'}</span></li>)}
         <li><strong>Langfuse</strong> <span className={`badge ${langfuse.configured ? 'good' : 'muted'}`}>{langfuse.configured ? 'Terhubung' : 'Belum'}</span></li></ul>
     </section>
   </>
@@ -135,8 +136,9 @@ export function Settings({ access, onAccessChange }: { access: AccessStatus | un
     const result = await accessRequest('lock')
     if (result.ok) onAccessChange(result.status)
   }
-  return <><PageTitle eyebrow="OTCA" title="Settings">Pengaturan kantor: akses, integrasi, budget, dan gateway. Rahasia tidak diisi dari halaman ini; kunci API tetap di infra/env.</PageTitle>
-    <OfficeSetup />
+  return <div className="management-page settings-page"><PageTitle eyebrow="PREFERENSI" title="Pengaturan">Kelola koneksi kantor, pantau budget, dan atur perlindungan akses.</PageTitle>
+    <nav className="settings-sections" aria-label="Bagian pengaturan">{[['office-access','Akses & peran'],['office-integrations','Integrasi'],['office-pools','Budget'],['office-gateways','Layanan'],['access-title','Keamanan'],['profile-lock-title','Privasi']].map(([id,label])=><button key={id} onClick={()=>document.getElementById(id)?.scrollIntoView({block:'start'})}>{label}</button>)}</nav>
+    <div className="settings-content"><OfficeSetup />
     <section className="card settings-card" aria-labelledby="access-title">
       <div className="settings-head"><div><p className="eyebrow">SECURITY</p><h2 id="access-title">Kunci akses sementara</h2></div>{access && <span className={`badge ${access.enabled ? 'good' : 'muted'}`}>{access.enabled ? 'On' : 'Off'}</span>}</div>
       <p className="small-note">Sementara. Diganti login Google SSO dan RBAC di L4.</p>
@@ -154,6 +156,6 @@ export function Settings({ access, onAccessChange }: { access: AccessStatus | un
         <p className="small-note">Lost the code? On the machine that runs OTCA, run <code>ruang access-code off</code> (or <code>ruang access-code new</code> for a new random code).</p>
       </>}
     </section>
-    <ProfileLockSettings />
-  </>
+    <ProfileLockSettings /></div>
+  </div>
 }

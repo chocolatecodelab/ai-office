@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { formatDateTime } from '../format.ts'
-import { TASK_STATUS_LABELS, type ActivityItem } from '../office-api.ts'
+import { AGENT_NAMES, TASK_STATUS_LABELS, type ActivityItem } from '../office-api.ts'
 import { usePolling } from '../polling.ts'
 import { EmptyState, LoadingState, PageTitle, SearchInput } from '../ui.tsx'
 
@@ -13,10 +13,13 @@ const ACTION_TEXT: Record<string, string> = {
   'note.delete': 'Catatan agent dihapus',
   'kill-switch.pause': 'Kill switch: dijeda',
   'kill-switch.resume': 'Kill switch: dilanjutkan',
+  'asset.rerender': 'PDF dibuat ulang',
+  'model.set': 'Model agent diperbarui',
+  'model.reset': 'Model agent dikembalikan ke bawaan',
 }
 
 function actorText(actor: string): string {
-  return actor.startsWith('agent:') ? `Agent ${actor.slice(6)}` : actor
+  return actor.startsWith('agent:') ? (AGENT_NAMES[actor.slice(6)] ?? `Agent ${actor.slice(6)}`) : actor === 'pengguna-lokal' ? 'Pengguna lokal' : actor
 }
 
 function describe(item: ActivityItem): string {
@@ -38,23 +41,26 @@ export function Activity() {
   const visible = activity.data.filter((item) => (brandId === 'all' || item.brandId === brandId)
     && (!needle || `${item.title ?? ''} ${describe(item)} ${actorText(item.actor)} ${item.reason ?? ''} ${item.brandName}`.toLowerCase().includes(needle)))
 
-  return <>
-    <PageTitle eyebrow="ACTIVITY" title="Activity">Riwayat tugas dan keputusan approval semua brand: siapa melakukan apa, dan kapan.</PageTitle>
+  return <div className="management-page activity-page">
+    <PageTitle eyebrow="RIWAYAT" title="Aktivitas">Telusuri pekerjaan tim, perubahan catatan, dan keputusan persetujuan.</PageTitle>
     {activity.data.length === 0 ? <EmptyState title="Belum ada aktivitas">Aktivitas muncul setelah tugas dibuat atau approval diputuskan.</EmptyState> : <>
-      <div className="toolbar">
+      <div className="toolbar management-toolbar" role="group" aria-label="Filter aktivitas">
         <button type="button" className={`chip chip-button ${brandId === 'all' ? 'active' : ''}`} aria-pressed={brandId === 'all'} onClick={() => setBrandId('all')}>Semua</button>
         {brands.map(([id, name]) => <button type="button" key={id} className={`chip chip-button ${brandId === id ? 'active' : ''}`} aria-pressed={brandId === id} onClick={() => setBrandId(id)}>{name}</button>)}
         <SearchInput value={query} onChange={setQuery} label="Cari aktivitas"/>
         <span className="toolbar-count">{visible.length} dari {activity.data.length}</span>
       </div>
-      <section className="data-list">{visible.map((item, index) => <article key={`${item.at}-${item.action}-${item.title}-${index}`}>
-        <div><h2>{item.title ?? '(tanpa judul)'}</h2><p>{describe(item)}{item.reason ? ` · ${item.reason}` : ''}</p></div>
-        <dl>
-          <div><dt>Waktu</dt><dd>{formatDateTime(item.at)}</dd></div>
-          <div><dt>Brand</dt><dd>{item.brandName}</dd></div>
-          <div><dt>Oleh</dt><dd>{actorText(item.actor)}</dd></div>
-        </dl>
-      </article>)}</section>
+      {visible.length===0 && <EmptyState title="Tidak ada aktivitas yang cocok">Ubah kata pencarian atau pilih brand lain.</EmptyState>}
+      <ol className="activity-timeline" aria-label="Riwayat aktivitas">{visible.map((item, index) => <li key={`${item.at}-${item.action}-${item.title}-${index}`}>
+        <div className="activity-marker" aria-hidden="true"/>
+        <article><div className="activity-entry-heading"><span className="activity-brand">{item.brandName}</span><time dateTime={item.at}>{formatDateTime(item.at)}</time></div>
+        <h2>{item.title?.trim() || (ACTION_TEXT[item.action] ? describe(item) : 'Aktivitas sistem')}</h2>
+        {item.title?.trim() && <p className="activity-description">{describe(item)}</p>}
+        {item.reason && <p className="activity-reason">{item.reason}</p>}
+        <p className="activity-actor">Oleh {actorText(item.actor)}</p>
+        {!ACTION_TEXT[item.action] && item.kind!=='status' && <details><summary>Detail aktivitas</summary><code>{item.action}</code></details>}
+        </article>
+      </li>)}</ol>
     </>}
-  </>
+  </div>
 }

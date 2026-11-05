@@ -1,3 +1,12 @@
+import { planSocialPost } from './social-schedule.js'
+import { cachedDocumentContext } from './document-context-cache.js'
+import { dependencyContext } from './dependency-context.js'
+import { cancelWorkflow } from './orchestration.js'
+import sharp from 'sharp'
+import PDFDocument from 'pdfkit'
+import { processPdf } from './document-processing.js'
+import { ChatWorkspace } from './chat-workspace.js'
+import { compactChat } from './chat-memory.js'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -124,6 +133,61 @@ describe.skipIf(!available)('office store, runner and event workflow (Postgres)'
     expect((await events.questions('otca', event.id))[0]).toMatchObject({ status: 'dijawab', speaker: 'Frau Priska' })
     const ppt = await events.startStage('otca', event.id, 'ppt', 'uji')
     expect(ppt.brief).toContain('Mulai dari bahasa')
+  })
+
+  it('screens audience research before Hermes and records identifier counts without originals',async()=>{
+    const task=await store.createTask('ciaomanda',{agentType:'content-creator',kind:'konten.riset',title:'Riset audiens',brief:'Nama: Sari\nEmail sari@example.com\nHP 081234567890\nPertanyaan: bagaimana belajar bahasa?',createdBy:'uji'})
+    const hermes=scriptedHermes([{output:'Tema: belajar bahasa\nCTA: Tinjau ide'}])
+    await runTask(deps(hermes),'ciaomanda',task.id)
+    expect(hermes.requests).toHaveLength(1)
+    const sent=JSON.stringify(hermes.requests[0])
+    for(const secret of ['Sari','sari@example.com','081234567890'])expect(sent).not.toContain(secret)
+    expect(sent).toContain('bagaimana belajar bahasa')
+    expect((await store.task('ciaomanda',task.id))?.status).toBe('waiting_approval')
+    const trace=(await store.taskEvents('ciaomanda',task.id)).filter(e=>e.type==='research_privacy')
+    expect(trace).toHaveLength(1)
+    expect(trace[0].payload).toMatchObject({scope:'text-only',counts:{email:1,telepon:1}})
+    expect(JSON.stringify(trace)).not.toContain('Sari')
+    expect(await store.task('otca',task.id)).toBeUndefined()
+  })
+
+  it('requires publication approval for a versioned same-brand social plan and never posts externally',async()=>{
+    const task=await store.createTask('otca',{agentType:'social-media-manager',kind:'publikasi.caption',title:'QA jadwal',brief:'Caption uji',createdBy:'uji'})
+    const plan={platform:'instagram',scheduledAt:new Date(Date.now()+86400000).toISOString()}
+    await expect(planSocialPost(store,'otca',task.id,plan,'uji')).rejects.toThrow()
+    await runTask(deps(scriptedHermes([{output:'Caption QA'}])),'otca',task.id)
+    await expect(planSocialPost(store,'otca',task.id,plan,'uji')).rejects.toThrow()
+    const review=(await store.approvals('otca',{taskId:task.id,open:true}))[0]
+    await store.decide('otca',review.id,{decision:'approved',actor:'uji'})
+    await expect(planSocialPost(store,'infojerman',task.id,plan,'uji')).rejects.toThrow()
+    const results=await Promise.all([planSocialPost(store,'otca',task.id,plan,'uji'),planSocialPost(store,'otca',task.id,plan,'uji')])
+    expect(results[0].id).toBe(results[1].id)
+    expect(results[0]).toMatchObject({delivery:'local-plan-only',status:'planned',approval_id:review.id})
+    await expect(planSocialPost(store,'otca',task.id,{...plan,scheduledAt:new Date(Date.now()+172800000).toISOString()},'uji')).rejects.toThrow()
+    expect((await store.taskEvents('otca',task.id)).filter(e=>e.type==='social_schedule')).toHaveLength(1)
+  })
+
+  it('migrates source and consent registries with same-brand and evidence constraints',async()=>{
+    const source=(await db.query("INSERT INTO sources(brand_id,title,created_by) VALUES('otca','Sumber QA','uji') RETURNING id")).rows[0]
+    await expect(db.query("INSERT INTO consents(brand_id,source_id,subject_reference,usage_scope,status,recorded_by) VALUES('otca',$1,'anon-qa','caption','granted','uji')",[source.id])).rejects.toThrow()
+    await expect(db.query("INSERT INTO consents(brand_id,source_id,subject_reference,usage_scope,recorded_by) VALUES('infojerman',$1,'anon-qa','caption','uji')",[source.id])).rejects.toThrow()
+    const consent=await db.query("INSERT INTO consents(brand_id,source_id,subject_reference,usage_scope,status,evidence_reference,recorded_by) VALUES('otca',$1,'anon-qa','caption','granted','qa-proof','uji') RETURNING status",[source.id])
+    expect(consent.rows[0].status).toBe('granted')
+  })
+
+  it('runs a local SMM classification tool from JSON and traces it without external social actions',async()=>{
+    const chat=new ChatWorkspace(store)
+    const file=await chat.upload('otca','social-media-manager','qa-comments.json',Buffer.from(JSON.stringify({comments:[{id:'qa-1',text:'Berapa biaya?'},{id:'qa-2',text:'Saya kecewa'}]})))
+    const task=await chat.createChat('otca','social-media-manager','Klasifikasikan komentar simulasi',{attachmentIds:[file.id],skills:['comment-classification']})
+    const hermes=scriptedHermes([{output:'Dua komentar memerlukan review; tidak ada balasan dikirim.'}])
+    await runTask({...deps(hermes),chat},'otca',task.id)
+    expect(hermes.requests[0].input).toContain('comment-classification')
+    expect(hermes.requests[0].input).toContain('complaint')
+    expect(hermes.requests[0].input).toContain('externalActions')
+    const evidence=(await chat.evidence('otca','social-media-manager')).find(e=>e.taskId===task.id)!
+    expect(evidence.trace.tools).toContainEqual({name:'comment-classification',status:'completed'})
+    expect((await store.task('otca',task.id))?.status).toBe('done')
+    expect((await chat.evidence('ciaomanda','social-media-manager')).some(e=>e.taskId===task.id)).toBe(false)
   })
 
   it('stores versioned Content Creator QC before approval and keeps reports brand scoped',async()=>{
@@ -294,13 +358,13 @@ describe.skipIf(!available)('office store, runner and event workflow (Postgres)'
     const hermes = scriptedHermes([{ output: 'a' }, { output: 'b' }])
     const make = (title: string) => store.createTask('otca', { agentType: 'digital-marketing', kind: 'konten.chat', title, brief: 'x', createdBy: 'uji' })
     await runTask(deps(hermes), 'otca', (await make('nt-1')).id)
-    expect(hermes.requests[0].instructions).toContain('Selalu mulai dengan salam.')
-    expect(hermes.requests[0].instructions).toContain('tengah bulan')
-    expect(hermes.requests[0].instructions).not.toContain('jangan bocor')
+    expect(hermes.requests[0].input).toContain('Selalu mulai dengan salam.')
+    expect(hermes.requests[0].input).toContain('tengah bulan')
+    expect(hermes.requests[0].input).not.toContain('jangan bocor')
 
     await store.updateNote('otca', rule.id, (current) => ({ ...current, active: false }), 'uji')
     await runTask(deps(hermes), 'otca', (await make('nt-2')).id)
-    expect(hermes.requests[1].instructions).not.toContain('Selalu mulai dengan salam.')
+    expect(hermes.requests[1].input).not.toContain('Selalu mulai dengan salam.')
 
     expect(await store.deleteNote('otca', own.id, 'uji')).toBe(true)
     expect(await store.deleteNote('otca', own.id, 'uji')).toBe(false)
@@ -392,6 +456,331 @@ describe.skipIf(!available)('office store, runner and event workflow (Postgres)'
     expect(await store.connections()).toEqual([])
     const actions = (await store.activity('otca', 100)).filter((entry) => entry.kind === 'audit').map((entry) => entry.action)
     expect(actions).toEqual(expect.arrayContaining(['integration.connect', 'integration.disconnect']))
+  })
+
+
+  it('persists one crew, waits for specialist approval, and synthesizes through Manager approval', async()=>{
+    const parent=await store.createTask('otca',{agentType:'manager',kind:'konten.orchestrasi',title:'Rencana konten tim',brief:'Buat caption',createdBy:'uji'})
+    const plan=JSON.stringify({summary:'Content Creator menulis caption',tasks:[{agentType:'content-creator',kind:'konten.caption',title:'Caption tim',brief:'Tulis caption draft tanpa klaim angka'}]})
+    const hermes=scriptedHermes([{output:plan},{output:'# Caption spesialis'},{output:'# Ringkasan Manager'}])
+    const runner=deps(hermes)
+    const [first]=await Promise.all([runTask(runner,'otca',parent.id),runTask(runner,'otca',parent.id)])
+    expect(first.next).toBe('retry')
+    const children=(await store.tasks('otca')).filter(t=>t.parentId===parent.id)
+    expect(children).toHaveLength(1)
+    expect(children[0]).toMatchObject({agentType:'content-creator',status:'queued',createdBy:'agent:manager'})
+    await runTask(runner,'otca',parent.id)
+    expect(hermes.requests).toHaveLength(1)
+    expect((await store.tasks('otca')).filter(t=>t.parentId===parent.id)).toHaveLength(1)
+    await runTask(runner,'otca',children[0].id)
+    await runTask(runner,'otca',parent.id)
+    expect(hermes.requests).toHaveLength(2)
+    const review=(await store.approvals('otca',{taskId:children[0].id,open:true}))[0]
+    await store.decide('otca',review.id,{decision:'approved',actor:'uji'})
+    await runTask(runner,'otca',parent.id)
+    expect(hermes.requests).toHaveLength(3)
+    expect(hermes.requests[2].input).toContain('# Caption spesialis')
+    expect((await store.task('otca',parent.id))?.status).toBe('waiting_approval')
+    expect(await store.approvals('otca',{taskId:parent.id,open:true})).toHaveLength(1)
+    await runTask(runner,'otca',parent.id)
+    expect(hermes.requests).toHaveLength(3)
+  })
+
+
+  it('runs a same-brand DAG only after predecessor approvals and hands over the approved version exactly once',async()=>{
+    const brand='infojerman'
+    const parent=await store.createTask(brand,{agentType:'manager',kind:'konten.orchestrasi',title:'Workflow berurutan',brief:'Naskah, storyboard, kalender',createdBy:'uji'})
+    const plan=JSON.stringify({summary:'Content → Video → SMM',tasks:[
+      {agentType:'social-media-manager',kind:'publikasi.kalender',title:'Kalender tahap3',brief:'Jadwalkan draft',dependsOn:['content-creator','video-editor']},
+      {agentType:'video-editor',kind:'video.storyboard',title:'Storyboard tahap2',brief:'Gunakan naskah',dependsOn:['content-creator']},
+      {agentType:'content-creator',kind:'konten.script',title:'Naskah tahap1',brief:'Susun naskah'},
+    ]})
+    const hermes=scriptedHermes([{output:plan},{output:'VERSI-DITOLAK'},{output:'NASKAH-SETUJU-V2'},{output:'STORYBOARD-SETUJU'},{output:'KALENDER-SETUJU'},{output:'RANGKUMAN-MANAGER'}])
+    const runner=deps(hermes)
+    const first=await runTask(runner,brand,parent.id)
+    const nodes=(await store.tasks(brand)).filter(t=>t.parentId===parent.id)
+    const content=nodes.find(t=>t.agentType==='content-creator')!,video=nodes.find(t=>t.agentType==='video-editor')!,smm=nodes.find(t=>t.agentType==='social-media-manager')!
+    expect(first.next==='retry'?first.children?.map(t=>t.id):[]).toEqual([content.id])
+    await runTask(runner,brand,video.id);expect(hermes.requests).toHaveLength(1)
+    await runTask(runner,brand,content.id)
+    await store.decide(brand,(await store.approvals(brand,{taskId:content.id,open:true}))[0].id,{decision:'rejected',note:'Perbaiki naskah',actor:'uji'})
+    await runTask(runner,brand,video.id);expect(hermes.requests).toHaveLength(2)
+    await runTask(runner,brand,content.id)
+    await store.decide(brand,(await store.approvals(brand,{taskId:content.id,open:true}))[0].id,{decision:'approved',actor:'uji'})
+    const second=await runTask(runner,brand,parent.id)
+    expect(second.next==='retry'?second.children?.map(t=>t.id):[]).toEqual([video.id])
+    await Promise.all([runTask(runner,brand,video.id),runTask(runner,brand,video.id)])
+    expect(hermes.requests).toHaveLength(4)
+    expect(hermes.requests[3].input).toContain('NASKAH-SETUJU-V2')
+    expect(hermes.requests[3].input).not.toContain('VERSI-DITOLAK')
+    const used=(await store.taskEvents(brand,video.id)).find(e=>e.type==='dependency_context')!
+    expect(used.payload.sources).toEqual([expect.objectContaining({taskId:content.id,version:2,summarized:false})])
+    await runTask(runner,brand,smm.id);expect(hermes.requests).toHaveLength(4)
+    await store.decide(brand,(await store.approvals(brand,{taskId:video.id,open:true}))[0].id,{decision:'approved',actor:'uji'})
+    await runTask(runner,brand,smm.id)
+    expect(hermes.requests[4].input).toContain('NASKAH-SETUJU-V2');expect(hermes.requests[4].input).toContain('STORYBOARD-SETUJU')
+    await store.decide(brand,(await store.approvals(brand,{taskId:smm.id,open:true}))[0].id,{decision:'approved',actor:'uji'})
+    await runTask(runner,brand,parent.id)
+    expect((await store.task(brand,parent.id))?.status).toBe('waiting_approval')
+    expect(hermes.requests).toHaveLength(6)
+    expect(await store.task('otca',video.id)).toBeUndefined()
+    await expect(dependencyContext(store,video,[{...(await store.task(brand,content.id))!,brandId:'otca'}],{run:async()=>{throw new Error('never')}})).rejects.toThrow('workflow brand')
+  })
+
+  it('recovers failed predecessors and atomically cancels pending stages and their open approvals',async()=>{
+    const brand='ciaomanda'
+    const parent=await store.createTask(brand,{agentType:'manager',kind:'konten.orchestrasi',title:'QA recovery DAG',createdBy:'uji'})
+    const plan=JSON.stringify({summary:'Workflow recovery',tasks:[{agentType:'content-creator',kind:'konten.script',title:'Naskah recovery',brief:'Naskah'},{agentType:'video-editor',kind:'video.storyboard',title:'Storyboard recovery',brief:'Storyboard',dependsOn:['content-creator']},{agentType:'social-media-manager',kind:'publikasi.kalender',title:'Kalender recovery',brief:'Kalender',dependsOn:['video-editor']}]})
+    const hermes=scriptedHermes([{output:plan},{output:'Naskah pulih'},{output:'Storyboard draft'}]),runner=deps(hermes)
+    await runTask(runner,brand,parent.id)
+    const nodes=(await store.tasks(brand)).filter(t=>t.parentId===parent.id),source=nodes.find(t=>t.agentType==='content-creator')!,video=nodes.find(t=>t.agentType==='video-editor')!,smm=nodes.find(t=>t.agentType==='social-media-manager')!
+    await store.transition(brand,source.id,'running',{actor:'uji'});await store.transition(brand,source.id,'failed',{actor:'uji'})
+    await runTask(runner,brand,parent.id);expect((await store.task(brand,parent.id))?.status).toBe('failed')
+    await store.transition(brand,source.id,'queued',{actor:'uji'})
+    await runTask(runner,brand,source.id)
+    expect((await store.task(brand,source.id))?.status).toBe('waiting_approval')
+    await store.decide(brand,(await store.approvals(brand,{taskId:source.id,open:true}))[0].id,{decision:'approved',actor:'uji'})
+    await store.transition(brand,parent.id,'queued',{actor:'uji'})
+    await runTask(runner,brand,parent.id);await runTask(runner,brand,video.id)
+    expect(await store.approvals(brand,{taskId:video.id,open:true})).toHaveLength(1)
+    await expect(cancelWorkflow(store,'otca',parent.id,'uji','cancel')).rejects.toThrow('tidak ditemukan')
+    await cancelWorkflow(store,brand,parent.id,'uji','QA selesai')
+    expect((await store.task(brand,source.id))?.status).toBe('approved')
+    expect((await store.task(brand,video.id))?.status).toBe('cancelled')
+    expect((await store.task(brand,smm.id))?.status).toBe('cancelled')
+    expect(await store.approvals(brand,{taskId:video.id,open:true})).toHaveLength(0)
+    await runTask(runner,brand,smm.id);expect(hermes.requests).toHaveLength(3)
+  })
+
+  it('caches complete-source dependency summaries and never reads a foreign parent as an input',async()=>{
+    const parent=await store.createTask('jepangkoey',{agentType:'manager',kind:'konten.orchestrasi',title:'QA konteks panjang',createdBy:'uji'})
+    const source=await store.createTask('jepangkoey',{agentType:'content-creator',kind:'konten.script',title:'Naskah panjang',parentId:parent.id,createdBy:'uji'})
+    const child=await store.createTask('jepangkoey',{agentType:'video-editor',kind:'video.storyboard',title:'Storyboard panjang',parentId:parent.id,createdBy:'uji'})
+    await store.transition('jepangkoey',source.id,'running',{actor:'uji'})
+    const result=await store.submitForApproval('jepangkoey',source.id,{content:'Sumber lengkap '.repeat(2500)+'SENTINEL-AKHIR',runId:'qa-long',source:'codex',model:'test',inputTokens:1,outputTokens:1})
+    await store.decide('jepangkoey',result.approval.id,{decision:'approved',actor:'uji'})
+    const approved=(await store.task('jepangkoey',source.id))!
+    const hermes=scriptedHermes(Array(10).fill({output:'Ringkasan bagian sumber'}))
+    const runtime={run:(request:RunRequest,key:string)=>hermes.run({url:'http://mock',key:'test'},request,key)}
+    const first=await dependencyContext(store,child,[approved],runtime),calls=hermes.requests.length
+    expect(calls).toBeGreaterThan(0);expect(hermes.requests.map(r=>r.input).join('\n')).toContain('SENTINEL-AKHIR')
+    expect(first.sources[0]).toMatchObject({summarized:true,cacheHit:false})
+    expect((await dependencyContext(store,child,[approved],runtime)).sources[0].cacheHit).toBe(true)
+    expect(hermes.requests).toHaveLength(calls)
+    await expect(dependencyContext(store,{...child,parentId:'another'},[approved],runtime)).rejects.toThrow('workflow brand')
+    await store.transition('jepangkoey',child.id,'cancelled',{actor:'uji'})
+    await store.transition('jepangkoey',parent.id,'cancelled',{actor:'uji'})
+  })
+
+  it('blocks aggregation after specialist failure and cancels queued children of a cancelled Manager',async()=>{
+    const make=()=>store.createTask('infojerman',{agentType:'manager',kind:'konten.orchestrasi',title:'Delegasi uji',brief:'Caption',createdBy:'uji'})
+    const plan=JSON.stringify({summary:'Caption',tasks:[{agentType:'content-creator',kind:'konten.caption',title:'Caption',brief:'Draft caption'}]})
+    const hermes=scriptedHermes([{output:plan},{output:plan}])
+    const runner=deps(hermes),parent=await make()
+    await runTask(runner,'infojerman',parent.id)
+    const child=(await store.tasks('infojerman')).find(t=>t.parentId===parent.id)!
+    await store.transition('infojerman',child.id,'running',{actor:'uji'})
+    await store.transition('infojerman',child.id,'failed',{actor:'uji'})
+    await runTask(runner,'infojerman',parent.id)
+    expect((await store.task('infojerman',parent.id))?.status).toBe('failed')
+    expect(hermes.requests).toHaveLength(1)
+    const cancelled=await make()
+    await runTask(runner,'infojerman',cancelled.id)
+    const cancelledChild=(await store.tasks('infojerman')).find(t=>t.parentId===cancelled.id)!
+    await store.transition('infojerman',cancelled.id,'cancelled',{actor:'uji'})
+    await runTask(runner,'infojerman',cancelledChild.id)
+    expect((await store.task('infojerman',cancelledChild.id))?.status).toBe('cancelled')
+    expect(hermes.requests).toHaveLength(2)
+  })
+
+
+  it('previews scoped notes without writes and matches the notes actually supplied to Hermes',async()=>{
+    const chat=new ChatWorkspace(store)
+    const rule=await store.addNote('infojerman',{kind:'rule',title:'QA preview aturan',body:'Wajib tinjau',agentType:'video-editor',active:true},'uji')
+    const memory=await store.addNote('infojerman',{kind:'memory',title:'QA preview beasiswa',body:'Target mahasiswa',agentType:'video-editor',active:true},'uji')
+    const hidden=await store.addNote('otca',{kind:'memory',title:'QA preview beasiswa rahasia',body:'Brand lain',agentType:'video-editor',active:true},'uji')
+    try{
+      const before=await db.query('SELECT count(*)::int AS n FROM agent_chat_memory')
+      const preview=await chat.previewNotes('infojerman','video-editor','Beasiswa',true)
+      expect(preview.notes.map(n=>n.id)).toEqual(expect.arrayContaining([rule.id,memory.id]))
+      expect(preview.notes.find(n=>n.id===memory.id)?.reason).toContain('beasiswa')
+      expect((await db.query('SELECT count(*)::int AS n FROM agent_chat_memory')).rows).toEqual(before.rows)
+      const withoutMemory=await chat.previewNotes('infojerman','video-editor','Beasiswa',false)
+      expect(withoutMemory.notes.some(n=>n.id===rule.id)).toBe(true)
+      expect(withoutMemory.notes.every(n=>n.kind==='rule')).toBe(true)
+      expect(JSON.stringify(preview)).not.toContain(hidden.id)
+      const task=await chat.createChat('infojerman','video-editor','Beasiswa',{})
+      const hermes=scriptedHermes([{output:'QA preview selesai'}])
+      await runTask({...deps(hermes),chat},'infojerman',task.id)
+      const trace=(await chat.evidence('infojerman','video-editor')).find(e=>e.taskId===task.id)!.trace
+      expect(trace.notes.map((n:{id:string})=>n.id)).toEqual(preview.notes.map(n=>n.id))
+      expect(hermes.requests[0].input).toContain('Target mahasiswa')
+      expect(hermes.requests[0].input).not.toContain('Brand lain')
+    }finally{await db.query('UPDATE agent_notes SET active=false WHERE id=ANY($1::uuid[])',[[rule.id,memory.id,hidden.id]])}
+  })
+
+  it('persists per-message exclusions, protects rules and scope, and leaves stored memory unchanged',async()=>{
+    const chat=new ChatWorkspace(store),brand='jepangkoey',agent='video-editor'
+    const rule=await store.addNote(brand,{kind:'rule',title:'QA memory choice aturan',body:'QA-REVIEW-WAJIB',agentType:agent,active:true},'uji')
+    const own=await store.addNote(brand,{kind:'memory',title:'Beasiswa pilihan',body:'QA-PRIVATE-NOTE',agentType:agent,active:true},'uji')
+    const shared=await store.addNote(brand,{kind:'memory',title:'Beasiswa bersama',body:'QA-SHARED-NOTE',agentType:null,active:true},'uji')
+    const other=await store.addNote(brand,{kind:'memory',title:'Beasiswa agent lain',body:'QA-OTHER-AGENT',agentType:'manager',active:true},'uji')
+    const foreign=await store.addNote('otca',{kind:'memory',title:'Beasiswa brand lain',body:'QA-OTHER-BRAND',agentType:agent,active:true},'uji')
+    try{
+      const memory=await chat.memory(brand,agent)
+      await chat.updateMemory(brand,agent,{revision:memory.revision,summary:'QA-SUMMARY-SECRET'})
+      const before=(await store.tasks(brand)).length
+      for(const id of [rule.id,other.id,foreign.id]){
+        await expect(chat.createChat(brand,agent,'Beasiswa',{excludedMemoryIds:[id]})).rejects.toThrow('tidak tersedia')
+        await expect(chat.previewNotes(brand,agent,'Beasiswa',true,{excludedMemoryIds:[id],useSummary:true})).rejects.toThrow('tidak tersedia')
+      }
+      expect((await store.tasks(brand)).length).toBe(before)
+      const choices={excludedMemoryIds:[own.id],useSummary:false}
+      const preview=await chat.previewNotes(brand,agent,'Beasiswa',true,choices)
+      expect(preview.notes.map(n=>n.id)).toEqual(expect.arrayContaining([rule.id,shared.id]))
+      expect(preview.notes.some(n=>n.id===own.id)).toBe(false)
+      expect(preview.excludedNotes.map(n=>n.id)).toEqual([own.id])
+      expect(preview.summary).toBeNull();expect(preview.summaryAvailable).toBe(true)
+      const task=await chat.createChat(brand,agent,'Beasiswa',choices)
+      expect(await chat.input(task)).toMatchObject(choices)
+      const hermes=scriptedHermes([{output:'QA pemilihan selesai'}])
+      await runTask({...deps(hermes),chat},brand,task.id)
+      expect(hermes.requests[0].input).toContain('QA-REVIEW-WAJIB')
+      expect(hermes.requests[0].input).toContain('QA-SHARED-NOTE')
+      expect(hermes.requests[0].input).not.toContain('QA-PRIVATE-NOTE')
+      expect(hermes.requests[0].input).not.toContain('QA-SUMMARY-SECRET')
+      const trace=(await chat.evidence(brand,agent)).find(e=>e.taskId===task.id)!.trace
+      expect(trace).toMatchObject({excludedNotes:[{id:own.id,title:own.title}],useSummary:false,summaryUsed:false})
+      const next=await chat.createChat(brand,agent,'Beasiswa',{})
+      expect((await chat.prepare(next)).notesText).toContain('QA-PRIVATE-NOTE')
+      expect((await chat.prepare(next)).extra).toContain('QA-SUMMARY-SECRET')
+      expect((await store.notesFor(brand,agent)).some(n=>n.id===own.id && n.active)).toBe(true)
+      await db.query("UPDATE tasks SET status='cancelled' WHERE id=$1",[next.id])
+    }finally{
+      await db.query('UPDATE agent_notes SET active=false WHERE id=ANY($1::uuid[])',[[rule.id,own.id,shared.id,other.id,foreign.id]])
+      const current=await chat.memory(brand,agent);await chat.updateMemory(brand,agent,{revision:current.revision,clear:true})
+    }
+  })
+
+  it('isolates chat attachments, selected skills and relevant memory with a durable evidence trail',async()=>{
+    const chat=new ChatWorkspace(store)
+    const file=await chat.upload('jepangkoey','content-creator','brief.md',Buffer.from('Target: mahasiswa beasiswa Jepang'))
+    await expect(chat.createChat('otca','content-creator','Baca file',{attachmentIds:[file.id]})).rejects.toThrow('bukan milik')
+    await store.addNote('jepangkoey',{kind:'memory',title:'Beasiswa Jepang',body:'Gaya bahasa ringkas',agentType:'content-creator',active:true},'uji')
+    await store.addNote('jepangkoey',{kind:'memory',title:'Kopi',body:'Espresso tanpa gula',agentType:'content-creator',active:true},'uji')
+    const task=await chat.createChat('jepangkoey','content-creator','Buat konten beasiswa Jepang',{attachmentIds:[file.id],skills:['content-outline']})
+    const hermes=scriptedHermes([{output:'Draft beasiswa berdasarkan brief'}])
+    await runTask({...deps(hermes),chat},'jepangkoey',task.id)
+    expect(hermes.requests[0].input).toContain('Target: mahasiswa beasiswa Jepang')
+    expect(hermes.requests[0].instructions).toContain('SKILL APLIKASI')
+    expect(hermes.requests[0].input).toContain('Gaya bahasa ringkas')
+    expect(hermes.requests[0].input).not.toContain('Espresso tanpa gula')
+    const evidence=(await chat.evidence('jepangkoey','content-creator')).find(e=>e.taskId===task.id)!
+    expect(evidence.trace.attachments[0]).toMatchObject({id:file.id,name:'brief.md'})
+    expect(await chat.attachment('otca','content-creator',file.id)).toBeUndefined()
+    expect(await chat.attachment('jepangkoey','manager',file.id)).toBeUndefined()
+    await chat.removeAttachment('jepangkoey','content-creator',file.id)
+    expect(await chat.attachment('jepangkoey','content-creator',file.id)).toBeUndefined()
+    await expect(chat.prepare(task)).rejects.toThrow('dihapus')
+  })
+  it('summarizes old chats, preserves user edits and prevents forgotten summaries from being regenerated',async()=>{
+    const chat=new ChatWorkspace(store)
+    const rows=await db.query(`INSERT INTO tasks (brand_id,agent_type,kind,title,brief,result,status,created_by,created_at) SELECT 'jepangkoey','manager','konten.chat','Memory test','Preferensi konten',repeat('Jawaban draft ',200),'done','uji','2026-01-01'::timestamptz + n*interval '1 minute' FROM generate_series(1,16) n RETURNING id`)
+    const latest=await store.task('jepangkoey',rows.rows[15].id)
+    const hermes=scriptedHermes([{output:'Pengguna memilih konten pendidikan; jadwal belum dikonfirmasi.'}])
+    await compactChat(chat,latest!,hermes,{url:'http://hermes',key:'test'},{source:'codex',reasoningEffort:'low'})
+    const memory=await chat.memory('jepangkoey','manager')
+    expect(memory.summary).toContain('konten pendidikan')
+    await chat.updateMemory('jepangkoey','manager',{revision:memory.revision,summary:'Ringkasan pilihan pengguna'})
+    await expect(chat.updateMemory('jepangkoey','manager',{revision:memory.revision,summary:'Versi lama'})).rejects.toThrow('telah berubah')
+    const updated=await chat.memory('jepangkoey','manager')
+    await chat.updateMemory('jepangkoey','manager',{revision:updated.revision,clear:true})
+    await compactChat(chat,latest!,hermes,{url:'http://hermes',key:'test'},{source:'codex',reasoningEffort:'low'})
+    expect((await chat.memory('jepangkoey','manager')).summary).toBe('')
+    expect(hermes.requests).toHaveLength(1)
+  })
+
+
+  it('hands Manager attachments to its own specialists without granting another brand access',async()=>{
+    const chat=new ChatWorkspace(store),file=await chat.upload('ciaomanda','manager','brief.md',Buffer.from('Kode handoff CIAO-831'))
+    const sharedMemory=await store.addNote('ciaomanda',{kind:'memory',title:'Pilihan bersama',body:'QA-SHARED-EXCLUDE',agentType:null,active:true},'uji')
+    const managerMemory=await store.addNote('ciaomanda',{kind:'memory',title:'Pilihan Manager',body:'QA-MANAGER-PRIVATE',agentType:'manager',active:true},'uji')
+    const parent=await chat.createChat('ciaomanda','manager','Tulis caption dari brief',{attachmentIds:[file.id],skills:['document-search'],excludedMemoryIds:[sharedMemory.id,managerMemory.id],useSummary:false},{agentType:'manager',kind:'konten.orchestrasi',title:'Caption lampiran',brief:'Tulis caption',createdBy:'uji'})
+    const plan=JSON.stringify({summary:'Caption dari lampiran',tasks:[{agentType:'content-creator',kind:'konten.caption',title:'Caption',brief:'Gunakan lampiran Manager'}]})
+    const hermes=scriptedHermes([{output:plan},{output:'Caption CIAO-831'}])
+    await runTask({...deps(hermes),chat},'ciaomanda',parent.id)
+    const child=(await store.tasks('ciaomanda')).find(t=>t.parentId===parent.id)!
+    expect((await chat.input(child)).attachmentIds).toEqual([file.id])
+    expect(await chat.input(child)).toMatchObject({excludedMemoryIds:[sharedMemory.id],useSummary:false})
+    expect(await chat.attachment('ciaomanda','content-creator',file.id)).toBeUndefined()
+    await runTask({...deps(hermes),chat},'ciaomanda',child.id)
+    expect(hermes.requests[1].input).toContain('CIAO-831')
+    expect((await chat.prepare(child)).trace.tools).toContainEqual({name:'document-search',status:'completed'})
+    expect(await chat.taskAttachment({...child,brandId:'otca'},file.id)).toBeUndefined()
+    await db.query('UPDATE agent_notes SET active=false WHERE id=ANY($1::uuid[])',[[sharedMemory.id,managerMemory.id]])
+  })
+
+
+  it('processes all PDF pages beyond the old limit and preserves explicit ranges and cached progress',async()=>{
+    const doc=new PDFDocument({autoFirstPage:false}),chunks:Buffer[]=[]
+    const bytes=new Promise<Buffer>(resolve=>{doc.on('data',b=>chunks.push(b));doc.on('end',()=>resolve(Buffer.concat(chunks)))})
+    for(let page=1;page<=8;page++){doc.addPage();doc.text('Halaman '+page+' isi dokumen lengkap. '+(page===8?'SENTINEL-HALAMAN-TERAKHIR':''))}doc.end()
+    const chat=new ChatWorkspace(store),file=await chat.upload('ciaomanda','manager','eight-pages.pdf',await bytes)
+    const task=await chat.createChat('ciaomanda','manager','Baca seluruh dokumen',{attachmentIds:[file.id]})
+    const full=await chat.taskAttachment(task,file.id)
+    const result=await processPdf(store,task,full!,undefined)
+    expect(result.coverage).toMatchObject({total:8,selected:8,completed:8,range:'all'})
+    expect(result.text).toContain('SENTINEL-HALAMAN-TERAKHIR')
+    const selected=await processPdf(store,task,full!,'7-8')
+    expect(selected.coverage.selected).toBe(2)
+    expect(selected.text).not.toContain('halaman 1]')
+    const saved=(await chat.attachments('ciaomanda','manager')).find(f=>f.id===file.id) as unknown as {processing:{status:string;completed:number}}
+    expect(saved.processing).toMatchObject({status:'ready',completed:2})
+    await chat.removeAttachment('ciaomanda','manager',file.id)
+    expect((await db.query('SELECT page FROM chat_attachment_pages WHERE attachment_id=$1',[file.id])).rows).toHaveLength(0)
+  },60000)
+
+
+  it('resumes scanned PDFs after a page failure without re-reading successful pages',async()=>{
+    const image=await sharp({create:{width:40,height:40,channels:3,background:'white'}}).png().toBuffer()
+    const doc=new PDFDocument({autoFirstPage:false}),chunks:Buffer[]=[]
+    const bytes=new Promise<Buffer>(resolve=>{doc.on('data',b=>chunks.push(b));doc.on('end',()=>resolve(Buffer.concat(chunks)))})
+    for(let page=1;page<=7;page++){doc.addPage();doc.image(image,40,40)}doc.end()
+    const chat=new ChatWorkspace(store),file=await chat.upload('ciaomanda','manager','seven-scans.pdf',await bytes)
+    const task=await chat.createChat('ciaomanda','manager','Baca scan',{attachmentIds:[file.id]})
+    const full=(await chat.taskAttachment(task,file.id))!
+    let calls=0,fail=true
+    const runtime={run:async(request:{input:string})=>{calls++;const page=Number(request.input.match(/halaman (\d+)/)?.[1]);return {runId:'ocr-'+page,status:fail&&page===4?'failed' as const:'completed' as const,output:fail&&page===4?'':'Teks hasil halaman '+page,model:'test',inputTokens:1,outputTokens:1}}}
+    await expect(processPdf(store,task,full,undefined,runtime)).rejects.toThrow('1 halaman gagal')
+    expect(calls).toBe(7)
+    fail=false
+    const result=await processPdf(store,task,full,undefined,runtime)
+    expect(calls).toBe(8)
+    expect(result.coverage).toMatchObject({total:7,completed:7,ocr:7})
+    expect(result.text).toContain('Teks hasil halaman 7')
+  },60000)
+
+
+  it('reuses document summaries by content version and budget, and stores cache metrics honestly',async()=>{
+    const chat=new ChatWorkspace(store),text='Dokumen panjang '.repeat(2000)
+    const file=await chat.upload('otca','manager','cache-document.md',Buffer.from(text))
+    const task=await chat.createChat('otca','manager','Halo',{attachmentIds:[]})
+    let calls=0
+    const runtime={run:async()=>{calls++;return {runId:'sum',status:'completed' as const,output:'Ringkasan dokumen',model:'m',inputTokens:1,outputTokens:1}}}
+    const source={id:file.id,name:file.name,extracted:text}
+    expect((await cachedDocumentContext(store,task,source,2000,runtime)).cacheHit).toBe(false)
+    const first=calls
+    expect((await cachedDocumentContext(store,task,source,2000,runtime)).cacheHit).toBe(true)
+    expect(calls).toBe(first)
+    expect((await cachedDocumentContext(store,task,{...source,extracted:text+' Versi baru'},2000,runtime)).cacheHit).toBe(false)
+    const hermes=scriptedHermes([{output:'Halo, ada yang bisa dibantu?',cacheReadTokens:8,cacheWriteTokens:0}])
+    await runTask({...deps(hermes),chat},'otca',task.id)
+    const metric=(await db.query('SELECT metrics FROM chat_context_metrics WHERE task_id=$1',[task.id])).rows[0].metrics
+    expect(metric).toMatchObject({cacheReadTokens:8,cacheWriteTokens:0,cacheStatus:'reported'})
+    expect(metric.officialSelectedChars).toBeLessThan(metric.officialSourceChars)
+    expect((await db.query('SELECT cache_read_tokens FROM cost_events WHERE task_id=$1',[task.id])).rows[0].cache_read_tokens).toBe(8)
+    await chat.removeAttachment('otca','manager',file.id)
+    expect((await db.query('SELECT * FROM document_context_cache WHERE attachment_id=$1',[file.id])).rows).toHaveLength(0)
   })
 
   it('parks a run that returns after the kill switch was pulled, without filing its result', async () => {

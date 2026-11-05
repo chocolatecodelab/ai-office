@@ -1,3 +1,6 @@
+import { SimulationClock } from '../office3d/simulation-clock.ts'
+import { FrameWindow, type FrameSample } from '../office3d/frame-window.ts'
+import { downloadText } from '../download.ts'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
@@ -5,6 +8,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { nextVisits, type Visit } from '../office3d/roaming.ts'
 import { renderQuality, type OfficeQuality } from '../office3d/quality.ts'
 import { LiftQueue } from '../office3d/lift-queue.ts'
+import { followingStep, type WalkingAgent } from '../office3d/walking-traffic.ts'
 import { Lift } from '../scene3d/lift.tsx'
 import { agentLook } from '../agents.ts'
 import { AGENT_NAMES, AGENT_STATUS_LABELS, type AgentStatus, type OfficeAgent, type OfficeBrand } from '../office-api.ts'
@@ -16,6 +20,11 @@ import { RoomEffects } from '../scene3d/room-effects.tsx'
 import { BuildingScene } from '../scene3d/building.tsx'
 import { OfficeChair, WorkDesk } from '../scene3d/props.tsx'
 import { useFurniture } from '../scene3d/furniture.ts'
+
+function SimulationTime({clock}:{clock:SimulationClock}) {
+  useFrame((_,delta)=>{clock.advance(delta)},-100)
+  return null
+}
 
 function Camera({ floor, overview, reset }: { floor: number; overview: boolean; reset: number }) {
   const { camera, gl, size } = useThree()
@@ -59,7 +68,7 @@ function Camera({ floor, overview, reset }: { floor: number; overview: boolean; 
   return null
 }
 
-function Agent({ id, agent, spot, layout, floor, activities, motion, onArrive, traffic, liftQueue, onSelect }: { id: string; agent: OfficeAgent; spot: Spot; layout: BuildingLayout; floor: number; activities: RoomControls; motion: boolean; onArrive: (id: string, key: string) => void; traffic: Map<string, THREE.Vector3>; liftQueue: LiftQueue; onSelect: (id: string) => void }) {
+function Agent({ simulationClock, id, agent, spot, layout, floor, activities, motion, onArrive, traffic, walkingTraffic, liftQueue, onSelect }: { simulationClock?:SimulationClock; id: string; agent: OfficeAgent; spot: Spot; layout: BuildingLayout; floor: number; activities: RoomControls; motion: boolean; onArrive: (id: string, key: string) => void; traffic: Map<string, THREE.Vector3>; walkingTraffic:Map<string,WalkingAgent>; liftQueue: LiftQueue; onSelect: (id: string) => void }) {
   const root = useRef<THREE.Group>(null)
   const parts: AvatarParts = { body: useRef(null), leftLeg: useRef(null), rightLeg: useRef(null), leftArm: useRef(null), rightArm: useRef(null) }
   const limbs=useMemo(()=>[parts.leftLeg,parts.rightLeg,parts.leftArm,parts.rightArm,parts.body],[parts.leftLeg,parts.rightLeg,parts.leftArm,parts.rightArm,parts.body])
@@ -72,7 +81,8 @@ function Agent({ id, agent, spot, layout, floor, activities, motion, onArrive, t
   const poseBuffer=useRef(new Float32Array(20))
   const directionBuffer=useMemo(()=>new THREE.Vector3(),[])
   const handProp = useRef<THREE.Group>(null)
-  useEffect(() => () => { traffic.delete(id); liftQueue.release(id) }, [traffic,id,liftQueue])
+  const trafficState=useRef<WalkingAgent>({id,position:{x:0,y:0,z:0},insideLift:false})
+  useEffect(() => () => { traffic.delete(id); walkingTraffic.delete(id); liftQueue.release(id) }, [traffic,walkingTraffic,id,liftQueue])
   useEffect(() => {
     if (target.current.key === spot.key && target.current.position.join(',') === spot.position.join(',')) return
     reported.current = undefined
@@ -83,8 +93,9 @@ function Agent({ id, agent, spot, layout, floor, activities, motion, onArrive, t
   useFrame((frame, delta) => {
     const group = root.current
     if (!group) return
-    const time = frame.clock.elapsedTime
+    const time = simulationClock?.current ?? frame.clock.elapsedTime
     let next = path.current[0]
+    const state=trafficState.current;state.position=group.position;state.target=motion || agent.status!=='idle' || liftQueue.has(id)?next:undefined;state.insideLift=liftQueue.has(id);walkingTraffic.set(id,state)
     // Hold the reservation from boarding until the passenger has exited on the destination floor.
     if (liftQueue.has(id) && group.position.x <= LIFT_LANE_X+0.02 && next && next.x < LIFT_LANE_X) liftQueue.release(id)
     let waitingLift = false
@@ -92,14 +103,15 @@ function Agent({ id, agent, spot, layout, floor, activities, motion, onArrive, t
     if (next && next.x === LIFT.x && group.position.x <= LIFT_LANE_X+0.02 && (motion || agent.status !== 'idle' || liftQueue.has(id))) {
       if (!liftQueue.request(id,floorAt(group.position.y),floorAt(path.current.find(p => Math.abs(p.y-group.position.y)>0.3)?.y ?? spot.position[1]),time)) {
         waitingLift = true
-        const slot = new THREE.Vector3(LIFT_LANE_X,group.position.y,LIFT.z+0.48*(liftQueue.rank(id)+1))
-        const offset = slot.sub(group.position)
+        const slot = new THREE.Vector3(...liftQueue.waitingTarget(id,[group.position.x,group.position.y,group.position.z]))
+        const offset = slot.clone().sub(group.position)
         const distance=offset.length()
         walkingToQueue=distance>0.03
         // Walk facing the way they go; once in the queue, face the lift door (+x).
         const facing = walkingToQueue ? Math.atan2(offset.x,offset.z) : Math.PI/2
         group.rotation.y += Math.atan2(Math.sin(facing-group.rotation.y),Math.cos(facing-group.rotation.y)) * (1-Math.exp(-12*delta))
-        if(walkingToQueue) group.position.add(offset.normalize().multiplyScalar(Math.min(distance,Math.min(delta,0.1)*1.8)))
+        state.target=walkingToQueue ? slot : undefined
+        if(walkingToQueue){const amount=followingStep(id,group.position,slot,Math.min(distance,Math.min(delta,0.1)*1.8),walkingTraffic.values());group.position.add(offset.normalize().multiplyScalar(amount));walkingToQueue=amount>0.001}
       } else if (Math.abs(group.position.z-LIFT.z)>0.03) {
         path.current.unshift(new THREE.Vector3(LIFT_LANE_X,group.position.y,LIFT.z))
         next=path.current[0]
@@ -113,8 +125,11 @@ function Agent({ id, agent, spot, layout, floor, activities, motion, onArrive, t
       else {
         const vertical = Math.abs(direction.y) > 0.01 && Math.hypot(direction.x,direction.z) < 0.01
         const boarding = vertical && !liftQueue.canDepart(id,time)
-        walking = !vertical
-        group.position.add(direction.normalize().multiplyScalar(Math.min(distance, Math.min(delta,0.1) * (boarding ? 0 : vertical ? 3.4 : 1.8))))
+        const alighting = liftQueue.has(id) && !vertical && next.x < LIFT.x && group.position.x > LIFT.doorX && !liftQueue.canExit(id,time)
+        walking = !vertical && !boarding && !alighting
+        const step=Math.min(distance, Math.min(delta,0.1) * (boarding || alighting ? 0 : vertical ? 3.4 : 1.8))
+        const amount=vertical||liftQueue.has(id)?step:followingStep(id,group.position,next,step,walkingTraffic.values())
+        group.position.add(direction.normalize().multiplyScalar(amount));walking=walking && amount>0.001
         if (walking) group.rotation.y += Math.atan2(Math.sin(Math.atan2(direction.x,direction.z)-group.rotation.y),Math.cos(Math.atan2(direction.x,direction.z)-group.rotation.y)) * (1-Math.exp(-12*delta))
       }
     }
@@ -209,13 +224,18 @@ export default function Office3D({ brands, floor, night, quality = 'auto', camer
   const [slow,setSlow]=useState(false)
   const [stats,setStats]=useState('')
   const [monitor,setMonitor]=useState(false)
+  const samples=useRef<Array<FrameSample & {calls:number;triangles:number}>>([])
+  const sampleScope=`${floor}/${overview}/${quality}/${night}/${motion}/${guide}`
   const constrained=Boolean(window.matchMedia?.('(pointer: coarse)').matches) || (navigator.hardwareConcurrency>0 && navigator.hardwareConcurrency<=4)
   const rendering=renderQuality(quality,constrained,slow)
   useEffect(()=>{const changed=()=>setVisible(!document.hidden);document.addEventListener('visibilitychange',changed);return()=>document.removeEventListener('visibilitychange',changed)},[])
+  useEffect(()=>{samples.current=[];setStats('')},[sampleScope,visible,rendering.low])
   const layout = useMemo(() => liveBuilding(brands), [brands])
   const visits = useRef(new Map<string, Visit>())
   const traffic = useRef(new Map<string, THREE.Vector3>())
+  const walkingTraffic=useRef(new Map<string,WalkingAgent>())
   const liftQueue = useRef(new LiftQueue())
+  const [simulationClock]=useState(()=>new SimulationClock())
   const elapsed = useRef(0)
   const [, redraw] = useState(0)
   const [notice,setNotice] = useState('')
@@ -260,7 +280,8 @@ export default function Office3D({ brands, floor, night, quality = 'auto', camer
     if(event.target!==event.currentTarget || guide)return
     if(event.key==='PageUp' || event.key==='PageDown'){event.preventDefault();onFloorSelect?.(Math.max(0,Math.min(layout.floors.length-1,floor+(event.key==='PageUp'?1:-1))))}
   }}><Canvas frameloop={visible ? 'always' : 'never'} shadows={rendering.shadows} dpr={rendering.dpr} camera={{ fov: 42, near: 0.5, far: 200 }}>
-    <FrameMonitor enabled={visible} onSlow={()=>setSlow(true)} onStats={monitor ? setStats : undefined}/>
+    <SimulationTime clock={simulationClock}/>
+    <FrameMonitor key={`${sampleScope}/${rendering.low}`} enabled={visible} onSlow={()=>setSlow(true)} onStats={monitor ? setStats : undefined} onSample={monitor ? sample=>{samples.current.push(sample);if(samples.current.length>300)samples.current.shift()} : undefined}/>
     <color attach="background" args={[night ? '#121b29' : '#c9e2ec']}/>
     <hemisphereLight args={['#ffffff', '#445044', night ? 0.5 : 1.1]}/>
     <directionalLight position={[8, 30, 12]} intensity={night ? 0.7 : 1.7} castShadow={rendering.shadows} shadow-mapSize={[1024, 1024]} shadow-camera-left={-14} shadow-camera-right={14} shadow-camera-top={14} shadow-camera-bottom={-14}/>
@@ -270,38 +291,41 @@ export default function Office3D({ brands, floor, night, quality = 'auto', camer
     {brands.flatMap((brand) => brand.agents.filter((agent) => agent.active).map((agent) => {
       const spot = visits.current.get(`${brand.id}/${agent.agentType}`)?.spot ?? agentSpot(layout, brand.id, agent.agentType, agent.status, agentIndex)
       agentIndex++
-      return spot ? <Agent key={`${brand.id}/${agent.agentType}`} id={`${brand.id}/${agent.agentType}`} agent={agent} spot={spot} layout={layout} floor={overview ? -1 : floor} activities={sceneActivities} motion={motion} traffic={traffic.current} liftQueue={liftQueue.current} onArrive={arrived} onSelect={onSelect}/> : null
+      return spot ? <Agent simulationClock={simulationClock} key={`${brand.id}/${agent.agentType}`} id={`${brand.id}/${agent.agentType}`} agent={agent} spot={spot} layout={layout} floor={overview ? -1 : floor} activities={sceneActivities} motion={motion} traffic={traffic.current} walkingTraffic={walkingTraffic.current} liftQueue={liftQueue.current} onArrive={arrived} onSelect={onSelect}/> : null
     }))}
     </group>{guide && <StatusGuide/>}
     <Camera floor={guide ? 0 : floor} overview={guide ? false : overview} reset={cameraReset}/>
-  </Canvas><div className="office-performance"><button aria-pressed={monitor} onClick={()=>setMonitor(!monitor)}>Performa · {rendering.low ? 'Hemat' : 'Detail'}</button>{monitor && <span role="status">{stats || 'Mengukur…'} · pengukuran browser</span>}</div>{!overview && floor===0 && <div className="office-scene-actions"><button onClick={() => visitVendor('bakso')}>Beli bakso</button><button onClick={() => visitVendor('kopi')}>Ngopi di luar</button><span role="status">{notice || 'Seret untuk memutar · scroll untuk zoom · klik agent untuk chat'}</span></div>}</div>
+  </Canvas><div className="office-performance"><button aria-pressed={monitor} onClick={()=>{samples.current=[];setStats('');setMonitor(!monitor)}}>Performa · {rendering.low ? 'Hemat' : 'Detail'}</button>{monitor && <span role="status">{stats || 'Pemanasan 10 detik…'} · pengukuran browser <button disabled={!stats} onClick={()=>downloadText('office-performance.json',JSON.stringify({recordedAt:new Date().toISOString(),scope:sampleScope,quality:rendering.low?'low':'high',viewport:{width:window.innerWidth,height:window.innerHeight},userAgent:navigator.userAgent,samples:samples.current,limitation:'Sampel foreground browser, bukan bukti HP kelas menengah atau kelulusan K6. Perpindahan lantai/grafis, jeda monitor dan tab tersembunyi memulai sesi baru.'},null,2),'application/json')}>Unduh sampel</button></span>}</div>{!overview && floor===0 && <div className="office-scene-actions"><button onClick={() => visitVendor('bakso')}>Beli bakso</button><button onClick={() => visitVendor('kopi')}>Ngopi di luar</button><span role="status">{notice || 'Seret untuk memutar · scroll untuk zoom · klik agent untuk chat'}</span></div>}</div>
 }
 
 const GUIDE_STATUSES: AgentStatus[]=['idle','working','waiting_quota','waiting_approval','revision','error','paused']
 function StatusGuide() {
  const layout=useMemo(()=>liveBuilding([]),[])
  const traffic=useRef(new Map<string,THREE.Vector3>())
+ const walkingTraffic=useRef(new Map<string,WalkingAgent>())
  const lift=useRef(new LiftQueue())
  return <group><mesh rotation={[-Math.PI/2,0,0]} receiveShadow><planeGeometry args={[24,12]}/><meshStandardMaterial color="#c8d6cc"/></mesh>{GUIDE_STATUSES.map((status,i)=>{
  const x=(i-3)*2.8
  const seated=!['idle','error'].includes(status)
  const spot:Spot={key:'guide-'+status,floor:0,position:[x,0,0],facing:0,seated,label:'Contoh gerakan',exit:[]}
  const agent:OfficeAgent={brandId:'guide',agentType:'manager',active:true,paused:status==='paused',status,currentTask:'Contoh visual · '+AGENT_STATUS_LABELS[status]}
- return <group key={status}>{seated && <OfficeChair position={[x,0,0]}/>}{['working','revision','waiting_quota'].includes(status) && <WorkDesk position={[x,0,1.05]} withChair={false} active={status!=='waiting_quota'}/> }<Agent id={'guide/'+status} agent={agent} spot={spot} layout={layout} floor={0} activities={defaultRoomControls()} motion={true} traffic={traffic.current} liftQueue={lift.current} onArrive={()=>{}} onSelect={()=>{}}/></group>
+ return <group key={status}>{seated && <OfficeChair position={[x,0,0]}/>}{['working','revision','waiting_quota'].includes(status) && <WorkDesk position={[x,0,1.05]} withChair={false} active={status!=='waiting_quota'}/> }<Agent id={'guide/'+status} agent={agent} spot={spot} layout={layout} floor={0} activities={defaultRoomControls()} motion={true} traffic={traffic.current} walkingTraffic={walkingTraffic.current} liftQueue={lift.current} onArrive={()=>{}} onSelect={()=>{}}/></group>
  })}</group>
 }
 
-function FrameMonitor({enabled,onSlow,onStats}:{enabled:boolean;onSlow:()=>void;onStats?: (text:string)=>void}) {
- const frames=useRef(0), elapsed=useRef(0),warmup=useRef(0)
- useEffect(()=>{frames.current=0;elapsed.current=0;warmup.current=0},[enabled])
+function FrameMonitor({enabled,onSlow,onStats,onSample}:{enabled:boolean;onSlow:()=>void;onStats?: (text:string)=>void;onSample?:(sample:FrameSample & {calls:number;triangles:number})=>void}) {
+ const measuring=Boolean(onStats)
+ const windowRef=useRef(new FrameWindow()),warmup=useRef(0),first=useRef(true)
+ useEffect(()=>{windowRef.current=new FrameWindow();warmup.current=0;first.current=true},[enabled,measuring])
  useFrame(({gl},delta)=>{
-  if(!enabled || delta>0.25)return
-  warmup.current+=delta;if(warmup.current<3)return
-  frames.current++;elapsed.current+=delta
-  if(elapsed.current>=2){const fps=frames.current/elapsed.current
-   if(fps<23)onSlow()
-   onStats?.(Math.round(fps)+' FPS · '+gl.info.render.calls+' draw calls · '+gl.info.render.triangles.toLocaleString('id-ID')+' segitiga')
-   frames.current=0;elapsed.current=0
+  if(!enabled)return
+  if(first.current){first.current=false;return}
+  warmup.current+=delta;if(warmup.current<10)return
+  const sample=windowRef.current.add(delta)
+  if(sample){
+   if(sample.fps<23)onSlow()
+   onStats?.(Math.round(sample.fps)+' FPS · p95 '+Math.round(sample.p95FrameMs)+' ms · '+sample.stalls+' tersendat · '+gl.info.render.calls+' draw calls')
+   onSample?.({...sample,calls:gl.info.render.calls,triangles:gl.info.render.triangles})
   }
  })
  return null

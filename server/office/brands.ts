@@ -5,7 +5,7 @@ import type { Queryable } from '../db/index.js'
 // Brands and their crews come from context/brands/<slug>/ (FR-01): agents.json lists the active
 // agents, visual.json gives the floor colour. The database mirrors them so tasks can reference them.
 
-export interface BrandDefinition { id: string; name: string; color: string; agents: string[]; briefToOtca: string[] }
+export interface BrandDefinition { id: string; name: string; color: string; agents: string[] }
 
 interface VisualJson { colors?: Record<string, string | string[]>; color_roles?: Record<string, string> }
 
@@ -20,10 +20,10 @@ export function readBrands(contextDir: string): BrandDefinition[] {
   const brandsDir = join(contextDir, 'brands')
   if (!existsSync(brandsDir)) return []
   return readdirSync(brandsDir).filter((slug) => existsSync(join(brandsDir, slug, 'agents.json'))).map((slug) => {
-    const crew = JSON.parse(readFileSync(join(brandsDir, slug, 'agents.json'), 'utf8')) as { brand: string; active_agents: string[]; brief_to_otca?: string[] }
+    const crew = JSON.parse(readFileSync(join(brandsDir, slug, 'agents.json'), 'utf8')) as { brand: string; active_agents: string[] }
     const visualFile = join(brandsDir, slug, 'visual.json')
     const visual = existsSync(visualFile) ? JSON.parse(readFileSync(visualFile, 'utf8')) as VisualJson : {}
-    return { id: slug, name: crew.brand, color: floorColor(visual), agents: crew.active_agents, briefToOtca: crew.brief_to_otca ?? [] }
+    return { id: slug, name: crew.brand, color: floorColor(visual), agents: crew.active_agents }
   })
 }
 

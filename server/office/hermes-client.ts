@@ -5,6 +5,7 @@ import type { HermesEndpoint } from '../settings.js'
 // completions, reports failures as a failed status instead of an HTTP 200 reply.
 
 export interface RunRequest {
+  images?: string[]
   input: string
   instructions: string
   sessionId: string
@@ -15,6 +16,8 @@ export interface RunRequest {
 }
 
 export interface RunResult {
+  cacheReadTokens?: number | null
+  cacheWriteTokens?: number | null
   runId: string
   status: 'completed' | 'failed' | 'cancelled'
   output: string
@@ -28,6 +31,11 @@ export interface HermesClient {
 }
 
 const TERMINAL = new Set(['completed', 'failed', 'cancelled'])
+interface HermesUsage {input_tokens?:number;output_tokens?:number;cache_read_tokens?:number;cache_write_tokens?:number;cache_read_input_tokens?:number;cache_creation_input_tokens?:number;input_tokens_details?:{cached_tokens?:number};prompt_tokens_details?:{cached_tokens?:number}}
+export function cacheUsage(usage?:HermesUsage) {
+  const valid=(value:unknown)=>typeof value==='number'&&Number.isSafeInteger(value)&&value>=0?value:null
+  return {cacheReadTokens:valid(usage?.cache_read_tokens??usage?.cache_read_input_tokens??usage?.input_tokens_details?.cached_tokens??usage?.prompt_tokens_details?.cached_tokens),cacheWriteTokens:valid(usage?.cache_write_tokens??usage?.cache_creation_input_tokens)}
+}
 
 export function createHermesClient(options: { pollMs?: number; timeoutMs?: number; fetcher?: typeof fetch } = {}): HermesClient {
   const pollMs = options.pollMs ?? 3000
@@ -38,6 +46,13 @@ export function createHermesClient(options: { pollMs?: number; timeoutMs?: numbe
   return {
     async run(endpoint, request, idempotencyKey) {
       const headers = { Authorization: `Bearer ${endpoint.key}`, 'Content-Type': 'application/json' }
+      if(request.images?.length) {
+        const response=await fetcher(`${endpoint.url}/v1/responses`,{method:'POST',headers:{...headers,'Idempotency-Key':idempotencyKey},signal:AbortSignal.timeout(timeoutMs),body:JSON.stringify({input:[{role:'user',content:[{type:'input_text',text:request.input},...request.images.map(url=>({type:'input_image',image_url:url}))]}],instructions:request.instructions,session_id:request.sessionId,provider:request.provider??'openai-codex',...(request.model?{model:request.model}:{}),...(request.reasoningEffort?{model_options:{reasoning_effort:request.reasoningEffort}}:{})})})
+        if(!response.ok)throw new HermesError(`Pembacaan gambar Hermes gagal (HTTP ${response.status}). Pastikan versi Hermes dan model mendukung gambar.`,response.status===429,response.status>=400 && response.status<500 && response.status!==429)
+        const data=await response.json() as {id?:string;status?:string;model?:string;output_text?:string;output?:Array<{content?:Array<{type?:string;text?:string}>}>;usage?:HermesUsage}
+        const output=data.output_text ?? data.output?.flatMap(item=>item.content??[]).filter(part=>part.type==='output_text').map(part=>part.text??'').join('\n') ?? ''
+        return {...cacheUsage(data.usage),runId:data.id??request.sessionId,status:data.status==='failed'?'failed':'completed',output,model:data.model??request.model??'hermes-agent',inputTokens:data.usage?.input_tokens??0,outputTokens:data.usage?.output_tokens??0}
+      }
       const created = await fetcher(`${endpoint.url}/v1/runs`, {
         method: 'POST',
         headers: { ...headers, 'Idempotency-Key': idempotencyKey },
@@ -57,9 +72,10 @@ export function createHermesClient(options: { pollMs?: number; timeoutMs?: numbe
         await sleep(pollMs)
         const polled = await fetcher(`${endpoint.url}/v1/runs/${encodeURIComponent(runId)}`, { headers })
         if (!polled.ok) continue
-        const run = await polled.json() as { status: string; output?: string; model?: string; usage?: { input_tokens?: number; output_tokens?: number } }
+        const run = await polled.json() as { status: string; output?: string; model?: string; usage?: HermesUsage }
         if (!TERMINAL.has(run.status)) continue
         return {
+          ...cacheUsage(run.usage),
           runId,
           status: run.status as RunResult['status'],
           output: run.output ?? '',
@@ -76,7 +92,7 @@ export function createHermesClient(options: { pollMs?: number; timeoutMs?: numbe
 
 /** A failure talking to Hermes itself (not the model); `busy` when it hit its concurrent-run cap. */
 export class HermesError extends Error {
-  constructor(message: string, readonly busy: boolean) { super(message) }
+  constructor(message: string, readonly busy: boolean, readonly permanent=false) { super(message) }
 }
 
 /**

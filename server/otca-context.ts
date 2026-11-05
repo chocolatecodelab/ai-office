@@ -1,10 +1,10 @@
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 // The OTCA context package (context/README.md): shared rules, agent definitions and brand files that Brain
 // maintains. Agent prompts are built from it, so a reviewed change to those files changes how agents work
-// without touching code. Read once at startup; restart the server after editing context/.
+// without touching code. Cached while file metadata is unchanged; edits invalidate automatically.
 
 const SHARED_FILES = ['aturan-umum.md', 'approval-matrix.md', 'raci.md', 'batas-tanggung-jawab.md']
 const BRAND_FILES = ['brand.md', 'visual.json', 'checklist-publikasi.md']
@@ -19,9 +19,18 @@ export function findContextDir(env: NodeJS.ProcessEnv = process.env): string | u
   return candidates.find((dir) => existsSync(join(dir, '_shared')))
 }
 
+const cachedFiles=new Map<string,{signature:string;content:string}>()
 function read(dir: string, relative: string): string | undefined {
   const file = join(dir, relative)
-  return existsSync(file) ? readFileSync(file, 'utf8').trim() : undefined
+  if(!existsSync(file)){cachedFiles.delete(file);return undefined}
+  const stat=statSync(file,{bigint:true})
+  const signature=`${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`
+  const cached=cachedFiles.get(file)
+  if(cached?.signature===signature)return cached.content
+  const content=readFileSync(file,'utf8').trim()
+  if(cachedFiles.size>500)cachedFiles.clear()
+  cachedFiles.set(file,{signature,content})
+  return content
 }
 
 /**

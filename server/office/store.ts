@@ -230,6 +230,7 @@ export class OfficeStore {
   }
 
   async createTask(brandId: string, input: NewTask, client: Queryable = this.db): Promise<Task> {
+    if(input.kind==='konten.orchestrasi' && (input.agentType!=='manager' || input.parentId))throw new Error('Orkestrasi hanya untuk Manager sebagai tugas induk.')
     approvalTypeFor(input.kind) // reject work types without an approval route up front
     const agent = await client.query('SELECT active FROM agents WHERE brand_id = $1 AND agent_type = $2', [brandId, input.agentType])
     if (!agent.rows[0]?.active) throw new Error(`Agen ${input.agentType} tidak aktif di brand ${brandId}.`)
@@ -300,7 +301,7 @@ export class OfficeStore {
    * Stores a finished run: the output becomes the next asset version, the task waits for the
    * approval its kind needs, and the run's token use is recorded.
    */
-  async submitForApproval(brandId: string, taskId: string, output: { content: string; runId: string; source: 'codex' | 'litellm'; model: string; inputTokens: number; outputTokens: number; durationMs?: number }): Promise<{ task: Task; approval: Approval }> {
+  async submitForApproval(brandId: string, taskId: string, output: { content: string; runId: string; source: 'codex' | 'litellm'; model: string; inputTokens: number; outputTokens: number; durationMs?: number; cacheReadTokens?:number|null;cacheWriteTokens?:number|null }): Promise<{ task: Task; approval: Approval }> {
     const result = await transaction(this.db, async (tx) => {
       const current = await this.task(brandId, taskId, tx)
       if (!current) throw new Error(`Tugas ${taskId} tidak ditemukan di brand ${brandId}.`)
@@ -311,8 +312,8 @@ export class OfficeStore {
         const checklist=dir ? agentContextFiles(dir,current.agentType,brandId)?.find(file=>file.path.endsWith('checklist-publikasi.md'))?.content ?? '' : ''
         await this.logEvent(tx,current,'content_qc',{version,report:screenContent(output.content,checklist)})
       }
-      await tx.query('INSERT INTO cost_events (task_id, brand_id, source, model, input_tokens, output_tokens, duration_ms) VALUES ($1, $2, $3, $4, $5, $6, $7)',
-        [taskId, brandId, output.source, output.model, output.inputTokens, output.outputTokens, output.durationMs ?? null])
+      await tx.query('INSERT INTO cost_events (task_id, brand_id, source, model, input_tokens, output_tokens, duration_ms,cache_read_tokens,cache_write_tokens) VALUES ($1, $2, $3, $4, $5, $6, $7,$8,$9)',
+        [taskId, brandId, output.source, output.model, output.inputTokens, output.outputTokens, output.durationMs ?? null,output.cacheReadTokens??null,output.cacheWriteTokens??null])
       const task = await this.transition(brandId, taskId, 'waiting_approval', { actor: `agent:${current.agentType}`, reason: `hasil v${version}`, patch: { result: output.content, error: null, run_id: output.runId } }, tx)
       const { rows } = await tx.query('INSERT INTO approvals (task_id, brand_id, approval_type) VALUES ($1, $2, $3) RETURNING *', [taskId, brandId, approvalTypeFor(current.kind)])
       return { task, approval: toApproval(rows[0]) }
@@ -354,8 +355,8 @@ export class OfficeStore {
         await tx.query('INSERT INTO assets (task_id, brand_id, kind, version, content, name, mime, storage_key, size_bytes) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)',
           [taskId, brandId, 'artifact', version + 1 + index, file.content, file.name, binary ? 'application/pdf' : null, binary?.key ?? null, binary?.size ?? null])
       }
-      await tx.query('INSERT INTO cost_events (task_id, brand_id, source, model, input_tokens, output_tokens, duration_ms) VALUES ($1, $2, $3, $4, $5, $6, $7)',
-        [taskId, brandId, output.source, output.model, output.inputTokens, output.outputTokens, output.durationMs ?? null])
+      await tx.query('INSERT INTO cost_events (task_id, brand_id, source, model, input_tokens, output_tokens, duration_ms,cache_read_tokens,cache_write_tokens) VALUES ($1, $2, $3, $4, $5, $6, $7,$8,$9)',
+        [taskId, brandId, output.source, output.model, output.inputTokens, output.outputTokens, output.durationMs ?? null,output.cacheReadTokens??null,output.cacheWriteTokens??null])
       return this.transition(brandId, taskId, 'done', { actor: `agent:${current.agentType}`, reason: `balasan chat v${version}`, patch: { result: output.content, error: null, run_id: output.runId } }, tx)
     })
   }
@@ -532,7 +533,7 @@ export class OfficeStore {
 
   async approvals(brandId: string, filter: { open?: boolean; taskId?: string } = {}): Promise<Approval[]> {
     const { rows } = await this.db.query(
-      `SELECT * FROM approvals WHERE brand_id = $1 AND (NOT $2 OR decision IS NULL) AND ($3::uuid IS NULL OR task_id = $3) ORDER BY created_at DESC`,
+      `SELECT * FROM approvals WHERE brand_id = $1 AND (NOT $2 OR (decision IS NULL AND EXISTS(SELECT 1 FROM tasks t WHERE t.id=approvals.task_id AND t.brand_id=approvals.brand_id AND t.status='waiting_approval'))) AND ($3::uuid IS NULL OR task_id = $3) ORDER BY created_at DESC`,
       [brandId, filter.open ?? false, filter.taskId ?? null])
     return rows.map(toApproval)
   }

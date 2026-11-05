@@ -5,7 +5,7 @@
 - Strategi & suara: **[DRAFT]**, disusun dari Struktur 5 AI Agent. Lengkapi bagian bertanda [KONFIRMASI].
 
 ## Siapa OTCA [DRAFT]
-Brand utama yang menaungi Info Jerman, Ciao Manda, dan Jepang Koey. Topik event yang disebut di dokumen
+Official OTCA berdiri sendiri. Info Jerman, Ciao Manda, dan Jepang Koey merupakan brand independen; Manager masing-masing tidak memiliki kewajiban operasional kepada OTCA. Topik event yang disebut di dokumen
 struktur: biaya, persiapan studi, beasiswa, dan kemampuan bahasa. Situs: www.otca.co.id.
 - Layanan inti: [KONFIRMASI: daftar program/layanan resmi]
 - Bukti yang boleh dipakai: [KONFIRMASI: prestasi, jumlah siswa, sertifikat yang sudah terverifikasi]

@@ -1,3 +1,6 @@
+import { LOCAL_FAQ, mockComments, previewComments } from './social-community.js'
+import { planSocialPost } from './social-schedule.js'
+import { evaluateQuality, validateEvaluationIds } from './quality-evaluation.js'
 import type { Server } from 'node:http'
 import express, { type Request, type Response, type Router } from 'express'
 import { WebSocketServer } from 'ws'
@@ -15,6 +18,8 @@ import { OfficeBus, type OfficeChange } from './bus.js'
 import { EVENT_STAGES, EventWorkflow } from './event-workflow.js'
 import { parseEventDate } from './event-date.js'
 import { validateNote } from './agent-notes.js'
+import { updateContext } from './context-editor.js'
+import { cancelWorkflow,orchestrationState } from './orchestration.js'
 import { buildPreview } from './asset-preview.js'
 import { extractArtifacts } from './artifacts.js'
 import { localFileStore } from './file-store.js'
@@ -26,6 +31,8 @@ import { createHermesClient, type HermesClient } from './hermes-client.js'
 import { TaskQueue, redisConnection } from './queue.js'
 import { TASK_STATUSES, type TaskStatus } from './status.js'
 import { OfficeStore } from './store.js'
+import { ChatWorkspace } from './chat-workspace.js'
+import { installChatRoutes } from './chat-routes.js'
 
 // The blueprint office API (/api/office): brands, tasks, approvals and the event workflow, backed by
 // Postgres, the BullMQ queue and each brand's Hermes. It starts beside the older Ruang routes; when
@@ -47,6 +54,8 @@ const OFFICE_ROLES = [
 ]
 
 export interface OfficeServices {
+  chat?: ChatWorkspace
+  contextDir?: string
   db: Db
   store: OfficeStore
   events: EventWorkflow
@@ -71,6 +80,7 @@ export async function startOffice(options: OfficeOptions = {}): Promise<OfficeSe
   await syncBrands(db, readBrands(contextDir))
   const bus = new OfficeBus()
   const store = new OfficeStore(db, bus, localFileStore(settings.filesDir))
+  const chat=new ChatWorkspace(store)
   const connections = new Connections({ store, envDir: settings.envDir, fetcher: options.fetcher })
   const drive = routedDrive(store, connections, options.fetcher)
   await drive.refresh()
@@ -79,6 +89,7 @@ export async function startOffice(options: OfficeOptions = {}): Promise<OfficeSe
   const hermes = options.hermes ?? createHermesClient()
   const queue = new TaskQueue(redisConnection(settings.redisUrl), {
     store,
+    chat,
     hermes,
     endpoint: (brandId) => settings.hermes(brandId),
     contextDir,
@@ -90,7 +101,7 @@ export async function startOffice(options: OfficeOptions = {}): Promise<OfficeSe
     const recovered = await queue.recover(store)
     if (recovered) console.log(`Office: ${recovered} tugas dijadwalkan ulang setelah start.`)
   }
-  return { db, store, events: new EventWorkflow(store, bus, integrations.drive), queue, bus, integrations, connections, drive, settings, hermes }
+  return { db, store, events: new EventWorkflow(store, bus, integrations.drive), queue, bus, integrations, connections, drive, settings, hermes, contextDir, chat }
 }
 
 const message = (error: unknown) => error instanceof Error ? error.message : String(error)
@@ -98,6 +109,7 @@ const message = (error: unknown) => error instanceof Error ? error.message : Str
 /** The /api/office routes. `services` resolves once the office has started (or rejects with why not). */
 export function officeRouter(services: Promise<OfficeServices>): Router {
   const router = express.Router()
+  installChatRoutes(router,services)
   let unavailable: string | undefined
   services.catch((error: unknown) => { unavailable = message(error) })
 
@@ -354,6 +366,23 @@ export function officeRouter(services: Promise<OfficeServices>): Router {
     return { ...brand, agents, summary }
   }))))
 
+  // Read-only evaluation of an explicitly selected cohort; no model calls or approvals.
+  router.post('/brands/:brand/quality/preview', handle(async (office, request) => {
+    const brandId=await brandOf(office, request)
+    const ids=validateEvaluationIds(request.body?.taskIds)
+    const tasks=await Promise.all(ids.map(id=>office.store.task(brandId,id)))
+    if(tasks.some(task=>!task)) throw new Error('Satu atau lebih tugas tidak tersedia di brand ini.')
+    const approvals=await office.store.approvals(brandId)
+    return evaluateQuality(brandId,tasks.filter((task): task is NonNullable<typeof task> => !!task),approvals)
+  }))
+
+  router.get('/brands/:brand/social/mock/comments',handle(async(office,request)=>mockComments(await brandOf(office,request))))
+  router.get('/brands/:brand/social/mock/faq',handle(async(office,request)=>({brandId:await brandOf(office,request),mode:'mock',approval:'not-approved',autoReply:false,items:LOCAL_FAQ})))
+  router.post('/brands/:brand/social/mock/classify',handle(async(office,request)=>({brandId:await brandOf(office,request),mode:'mock',items:previewComments(request.body)})))
+
+  router.post('/brands/:brand/tasks/:id/social-schedule',handle(async(office,request)=>planSocialPost(office.store,await brandOf(office,request),String(request.params.id),request.body,LOCAL_ACTOR)))
+  router.get('/brands/:brand/social-schedule',handle(async(office,request)=>({delivery:'local-plan-only',items:(await office.store.db.query('SELECT * FROM social_schedule WHERE brand_id=$1 ORDER BY scheduled_at',[await brandOf(office,request)])).rows})))
+
   router.get('/brands/:brand/tasks', handle(async (office, request) => {
     const status = text(request.query.status)
     if (status && !TASK_STATUSES.includes(status as TaskStatus)) throw new Error(`Status ${status} tidak dikenal.`)
@@ -378,9 +407,15 @@ export function officeRouter(services: Promise<OfficeServices>): Router {
   }
   router.get('/brands/:brand/agents/:agent/context', handle(async (office, request) => {
     const { brand, agent } = await agentOf(office, request)
-    const dir = findContextDir()
+    const dir = office.contextDir ?? findContextDir()
     if (!dir) throw new Error('Konteks resmi belum tersedia.')
     return agentContextFiles(dir, agent, brand) ?? []
+  }))
+  router.put('/brands/:brand/agents/:agent/context', handle(async (office, request) => {
+    const { brand, agent } = await agentOf(office, request)
+    const dir = office.contextDir ?? findContextDir()
+    if (!dir) throw new Error('Konteks resmi belum tersedia.')
+    return updateContext(dir, brand, agent, body(request), LOCAL_ACTOR)
   }))
   // Rules and memory people add on top of the read-only context/ package; every change is audited.
   const noteAgent = async (office: OfficeServices, brand: string, input: Record<string, unknown>) => {
@@ -410,7 +445,7 @@ export function officeRouter(services: Promise<OfficeServices>): Router {
     const message = text(body(request).message)?.trim()
     if (!message || message.length > 12000) throw new Error('Pesan harus berisi 1–12000 karakter.')
     // Chat stays on the durable queue: quota, task status, audit and approval keep working.
-    const task = await office.store.createTask(brand, { agentType: agent, kind: 'konten.chat', title: message.slice(0,100), brief: message, createdBy: LOCAL_ACTOR })
+    const task = await (office.chat??new ChatWorkspace(office.store)).createChat(brand,agent,message,body(request))
     await office.queue.enqueue(task)
     return task
   }))
@@ -420,23 +455,26 @@ export function officeRouter(services: Promise<OfficeServices>): Router {
     const task = await office.store.task(brandId, String(request.params.id))
     if (!task) throw new Error('Tugas tidak ditemukan.')
     const [assets, approvals, history] = await Promise.all([office.store.assets(brandId, task.id), office.store.approvals(brandId, { taskId: task.id }), office.store.taskEvents(brandId, task.id)])
-    return { task, assets, approvals, history }
+    const orchestration=task.kind==='konten.orchestrasi' ? await orchestrationState(office.store,task) : undefined
+    return { task, assets, approvals, history, orchestration }
   }))
 
   router.post('/brands/:brand/tasks', handle(async (office, request) => {
     const brandId = await brandOf(office, request)
     const input = body(request)
-    const task = await office.store.createTask(brandId, {
+    if(input.kind==='konten.orchestrasi' && input.agentType!=='manager')throw new Error('Delegasi tim hanya dapat dimulai melalui Manager.')
+    const taskInput = {
       agentType: text(input.agentType) ?? '', kind: text(input.kind) ?? '', title: text(input.title)?.trim() || '',
       brief: text(input.brief), priority: typeof input.priority === 'number' ? input.priority : undefined,
       urgent: input.urgent === true, complex: input.complex === true, createdBy: LOCAL_ACTOR,
-    })
+    }
+    const task = input.kind==='konten.orchestrasi' ? await (office.chat??new ChatWorkspace(office.store)).createChat(brandId,'manager',taskInput.brief??'',input,taskInput) : await office.store.createTask(brandId,taskInput)
     await office.queue.enqueue(task)
     return task
   }))
 
   router.post('/brands/:brand/tasks/:id/cancel', handle(async (office, request) =>
-    office.store.transition(await brandOf(office, request), String(request.params.id), 'cancelled', { actor: LOCAL_ACTOR, reason: text(body(request).reason) ?? 'dibatalkan staf' })))
+    cancelWorkflow(office.store,await brandOf(office, request),String(request.params.id),LOCAL_ACTOR,text(body(request).reason)??'dibatalkan staf')))
 
   router.post('/brands/:brand/tasks/:id/retry', handle(async (office, request) => {
     const brandId = await brandOf(office, request)

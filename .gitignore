@@ -21,3 +21,4 @@ data/
 
 # Raw 3D asset packs (large, re-downloadable; licences in docs/aset-3d.md). Optimised GLBs go to public/models/.
 aset-sumber/
+context/.history/

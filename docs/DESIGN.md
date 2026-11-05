@@ -3,6 +3,22 @@
 Panduan tampilan antarmuka kantor, mengikuti Brand Guidelines OTCA (`context/brands/otca/visual.json`, status RESMI).
 Warna dan huruf di sini sama dengan guideline; bagian tata letak adalah keputusan antarmuka.
 
+## Penerapan 4 November 2026
+
+Pemakaian kini memakai ringkasan empat metrik, komposisi input/output, sorotan penggunaan terbesar, dan grafik ranking yang dapat diganti antara Brand/Agent/Jenis pekerjaan/Model serta Token/Eksekusi/Biaya LiteLLM. Semua baris memakai skala yang sama dari nol dan dapat dibuka untuk angka rinci; nilai nol tidak diberi panjang bar minimum palsu. Bagian Langfuse memiliki metrik dan grafik model sendiri, tidak dijumlahkan dengan catatan kantor. API saat ini menyediakan agregat periode, sehingga grafik menunjukkan perbandingan kategori, bukan tren waktu rekaan. Pemilih periode membuat reader baru untuk menghindari respons lama tampil sebagai periode baru. Konteks filter kelompok/ukuran tetap dipertahankan saat periode diganti.
+
+Perapian halaman operasional: Agent memakai kartu satu kolom dengan portrait/peran/status, ringkasan pekerjaan, Chat/Beri tugas, dan konfigurasi yang dapat dibuka. Aktivitas memakai riwayat dengan judul aksi bermakna; Memori memakai selector lingkup dan daftar panduan di samping pembaca Markdown yang dirender lewat React (tanpa HTML mentah). Log memakai baris nama/status/latensi dan panel tugas gagal terpisah. Pengaturan memiliki navigasi bagian, detail peran, baris integrasi, kartu budget, dan status koneksi. Semua halaman memakai skala judul 30 px desktop / 26 px mobile dan permukaan tanpa bayangan berulang.
+
+Pemakaian dan budget menampilkan USD serta estimasi IDR memakai kurs tetap yang diminta pengguna: USD_TO_IDR = 18168 dalam src/usage.ts. Konversi memakai angka USD asli sebelum pembulatan tampilan, lalu dibulatkan ke rupiah penuh dengan tanda estimasi; kurs bukan data pasar otomatis. Angka Langfuse tetap estimasi, bukan tagihan ChatGPT Plus. Konversi Langfuse tetap tampil walaupun periode lokal belum memiliki run.
+
+Tindak lanjut audit: roster desktop tetap 304 px, panel kerja agent terbuka memakai 460 px. Di bawah 1280 px tersedia pilihan Tim/Kantor 3D, dengan Tim sebagai akses awal; brand dapat dipilih tanpa membuka scene. CTA Beri tugas tersedia dari Office/board dan kartu Agent. Detail tugas memakai dialog yang mempertahankan filter board, menghubungkan hasil, berkas, dan approval dalam konteks brand yang sama. Preview hasil memakai komponen Berkas yang sudah tersedia.
+
+Arah design.md diadopsi untuk shell dan Office: rail desktop 80 px yang dapat diperluas, drawer mobile, Montserrat, ringkasan dengan lingkup semua kantor, viewport utama, pencarian agent, area perlu perhatian, serta panel nonmodal pada layar >=1280 px. Pada layar kecil detail agent tetap dialog. Kontrol sekunder berada di Pengaturan tampilan; perbesar kantor dapat ditutup dengan Escape.
+
+Komposisi workspace dikelola dalam src/workspace.css, terpisah dari primitif lama styles.css. Dokumen ini menggantikan aturan drawer-only desktop dan label kapital berjarak lebar untuk UI rutin di bagian lama di bawah. Semua route/API/approval tetap memakai alur yang sama. Pemeriksaan visual bukan pernyataan kelulusan seluruh audit WCAG.
+
+Validasi penerapan: build produksi, lint berkas yang diubah, dan 52 berkas pengujian lulus (275 tes, 1 dilewati). Tema gelap dan terang diperiksa pada lebar 1440, 1280, 1024, 768, 390, dan 320 px tanpa overflow horizontal halaman. Pencarian agent, drawer mobile, dan panel detail desktop juga diperiksa di browser lokal. Perubahan ini menyempurnakan shell dan halaman Office; pemeriksaan visual mendalam seluruh halaman lain tetap pekerjaan lanjutan.
+
 ## Identitas
 - **Nama produk:** OTCA (sebelumnya "Ruang"). Perintah `ruang`, variabel `RUANG_*`, dan nama ruangan berbahasa Indonesia ("Ruang kerja") tidak berubah.
 - **Kesan:** eksklusif, premium, kredibel; hitam dan emas, tetap hangat dan mudah dibaca.

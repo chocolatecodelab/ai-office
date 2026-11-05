@@ -4,6 +4,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { agentContextFiles, contextPrompt, findContextDir } from './otca-context.js'
+import { readBrands } from './office/brands.js'
 
 describe('OTCA context package', () => {
   let dir: string
@@ -59,6 +60,20 @@ describe('OTCA context package', () => {
     for (const agent of ['manager', 'content-creator', 'video-editor', 'social-media-manager', 'digital-marketing', 'event-specialist']) {
       const files = agentContextFiles(repoContext, agent, 'otca')
       expect(files?.length, agent).toBe(agent === 'manager' ? 9 : 8)
+    }
+  })
+  it('keeps all four Manager contexts independent without a brief_to_otca obligation',()=>{
+    const context=fileURLToPath(new URL('../context',import.meta.url))
+    const brands=readBrands(context)
+    expect(brands).toHaveLength(4)
+    for(const brand of brands){
+      const files=agentContextFiles(context,'manager',brand.id)!
+      const prompt=contextPrompt(files)
+      expect(prompt).toContain('Keempat brand independen')
+      expect(prompt).not.toContain('brief_to_otca')
+      const crew=JSON.parse(files.find(f=>f.path==='/brand/agents.json')!.content)
+      expect(crew.slug).toBe(brand.id)
+      expect(crew.active_agents).toEqual(brand.agents)
     }
   })
 })

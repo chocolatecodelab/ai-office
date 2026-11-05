@@ -23,6 +23,7 @@ export function AgentNotes({ brandId, agentType, agentName }: { brandId: string;
   const [draft, setDraft] = useState<Draft>()
   const [confirming, setConfirming] = useState<string>()
   const [busy, setBusy] = useState(false)
+  const [search,setSearch]=useState('')
   const [error, setError] = useState<string>()
   const failure = (cause: unknown) => cause instanceof Error ? cause.message : String(cause)
 
@@ -32,7 +33,7 @@ export function AgentNotes({ brandId, agentType, agentName }: { brandId: string;
   useEffect(() => { setNotes(undefined); setDraft(undefined); setConfirming(undefined); setError(undefined); void load() }, [load, agentType])
 
   const mine = (notes ?? []).filter((note) => note.agentType === null || note.agentType === agentType)
-  const sorted = [...mine].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+  const sorted = [...mine].filter(note=>`${note.title} ${note.body}`.toLowerCase().includes(search.trim().toLowerCase())).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
 
   const run = async (work: () => Promise<unknown>) => {
     setBusy(true); setError(undefined)
@@ -52,7 +53,7 @@ export function AgentNotes({ brandId, agentType, agentName }: { brandId: string;
     <div className="notes-head">
       <div>
         <h3>Aturan dan memori tim</h3>
-        <p>Catatan ini dimuat ke {agentName} pada tugas berikutnya. Konteks resmi di bawah tetap menang: catatan tidak bisa melewati approval, publikasi, iklan, atau budget.</p>
+        <p>Catatan dimuat ke {agentName} pada tugas berikutnya. Konteks resmi tetap menjadi acuan; catatan tidak menggantikan aturan approval, publikasi, iklan, atau budget.</p>
       </div>
       {!draft && <button type="button" className="notes-add" onClick={() => { setDraft(blank); setError(undefined) }}>Tambah catatan</button>}
     </div>
@@ -81,6 +82,8 @@ export function AgentNotes({ brandId, agentType, agentName }: { brandId: string;
     {!notes && !error && <p className="muted">Memuat catatan…</p>}
     {notes && mine.length === 0 && !draft && <p className="notes-empty">Belum ada catatan. Tambahkan aturan (misalnya &ldquo;selalu tulis harga dalam rupiah&rdquo;) atau memori (misalnya &ldquo;klien memilih akhir pekan&rdquo;).</p>}
 
+    {mine.length>0 && <label className="notes-field">Cari catatan dan memori<input type="search" value={search} onChange={e=>setSearch(e.target.value)} placeholder="Judul atau isi catatan…"/></label>}
+    {mine.length>0 && sorted.length===0 && <p>Tidak ada catatan yang sesuai pencarian.</p>}
     <ul className="notes-list">
       {sorted.map((note) => <li key={note.id} className={note.active ? undefined : 'off'}>
         <div className="notes-row-head">

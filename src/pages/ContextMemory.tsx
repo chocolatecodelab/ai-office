@@ -1,11 +1,14 @@
 import { useEffect, useState } from 'react'
 import { AgentNotes } from '../components/AgentNotes.tsx'
+import { ReadOnlyMarkdown } from '../components/ReadOnlyMarkdown.tsx'
 import { FLOOR_ORDER } from '../office3d/building.ts'
 import { AGENT_NAMES, officeRequest, type OfficeBrand } from '../office-api.ts'
 import { usePolling } from '../polling.ts'
 import { EmptyState, LoadingState, PageTitle } from '../ui.tsx'
 
 interface ContextFile { path: string; content: string }
+const FILE_LABELS:Record<string,string> = {'aturan-umum.md':'Aturan umum','approval-matrix.md':'Alur persetujuan','raci.md':'Pembagian tanggung jawab','batas-tanggung-jawab.md':'Batas tanggung jawab','brand.md':'Panduan brand','visual.json':'Identitas visual','checklist-publikasi.md':'Checklist publikasi'}
+function fileLabel(path:string) {const name=path.split('/').pop() ?? path;return FILE_LABELS[name] ?? (AGENT_NAMES[name.replace('.md','')] ? `Peran ${AGENT_NAMES[name.replace('.md','')]}` : name)}
 
 /** The official context an agent works from (context/ in the repo), read only. Changes go through a PR. */
 export function Memory() {
@@ -37,23 +40,21 @@ export function Memory() {
   if (brands.status === 'pending') return <><PageTitle eyebrow="MEMORY" title="Memory"/><LoadingState message="Memuat brand dan agent..."/></>
   if (brands.status === 'failed' || !brand || !agent) return <><PageTitle eyebrow="MEMORY" title="Memory"/><EmptyState title="Tidak tersedia">Daftar agent belum dapat dimuat.</EmptyState></>
 
-  const shown = files?.find((file) => file.path === open)
-  return <>
-    <PageTitle eyebrow="MEMORY" title="Memory">Apa yang dibawa setiap agent: aturan dan memori tambahan dari tim (bisa ditambah, diubah, dinonaktifkan, dihapus) dan konteks resmi yang hanya dibaca (perubahan lewat PR ke folder context/, lalu restart service).</PageTitle>
-    <div className="toolbar" role="group" aria-label="Brand">
-      {ordered.map((item) => <button type="button" key={item.id} className={`chip chip-button ${item.id === brand.id ? 'active' : ''}`} aria-pressed={item.id === brand.id} onClick={() => setBrandId(item.id)}>{item.name}</button>)}
+  const shown = files?.find((file) => file.path === open) ?? files?.[0]
+  return <div className="management-page memory-page">
+    <PageTitle eyebrow="PENGETAHUAN" title="Memori">Kelola catatan tim dan baca panduan yang digunakan agent dalam bekerja.</PageTitle>
+    <div className="management-toolbar memory-scope">
+      <label>Brand<select value={brand.id} onChange={e=>{setBrandId(e.target.value);setAgentType(undefined)}}>{ordered.map(b=><option value={b.id} key={b.id}>{b.name}</option>)}</select></label>
+      <label>Agent<select value={agent.agentType} onChange={e=>setAgentType(e.target.value)}>{brand.agents.filter(a=>a.active).map(a=><option value={a.agentType} key={a.agentType}>{AGENT_NAMES[a.agentType] ?? a.agentType}</option>)}</select></label>
+      <span>Catatan dan panduan sesuai tim yang dipilih.</span>
     </div>
-    <div className="toolbar" role="group" aria-label="Agent">
-      {brand.agents.filter((item) => item.active).map((item) => <button type="button" key={item.agentType} className={`chip chip-button ${item.agentType === agent.agentType ? 'active' : ''}`} aria-pressed={item.agentType === agent.agentType} onClick={() => setAgentType(item.agentType)}>{AGENT_NAMES[item.agentType] ?? item.agentType}</button>)}
-    </div>
-    <AgentNotes brandId={brand.id} agentType={agent.agentType} agentName={AGENT_NAMES[agent.agentType] ?? agent.agentType}/>
-    <h2 className="notes-official">Konteks resmi <small>hanya dibaca</small></h2>
+    <AgentNotes key={`${brand.id}/${agent.agentType}`} brandId={brand.id} agentType={agent.agentType} agentName={AGENT_NAMES[agent.agentType] ?? agent.agentType}/>
+    <section className="official-library" aria-label="Konteks resmi"><div className="section-heading"><div><h2>Panduan resmi</h2><p>Dokumen acuan brand dan peran. Bagian ini hanya dapat dibaca.</p></div><span className="neutral-tag">Hanya baca</span></div>
     {error && <p className="form-error" role="alert">{error}</p>}
     {!files && !error && <p className="muted">Membaca konteks…</p>}
-    {files && <section className="data-list">{files.map((file) => <article key={file.path}>
-      <div><h2>{file.path}</h2><p>{file.content.length.toLocaleString('id-ID')} karakter{file.content.includes('[RESMI') ? ' · memuat bagian [RESMI]' : ''}</p></div>
-      <button type="button" className="refresh-button" aria-expanded={open === file.path} onClick={() => setOpen(open === file.path ? undefined : file.path)}>{open === file.path ? 'Tutup' : 'Lihat'}</button>
-    </article>)}</section>}
-    {shown && <section className="card" aria-live="polite"><p className="eyebrow">{shown.path}</p><pre className="office-result">{shown.content}</pre></section>}
-  </>
+    {files && files.length===0 && <p>Belum ada panduan resmi untuk agent ini.</p>}
+    {files && files.length>0 && <div className="context-library"><div className="context-file-list" role="group" aria-label="Pilih panduan">{files.map(file=><button key={file.path} aria-pressed={shown?.path===file.path} aria-controls="context-reader" onClick={()=>setOpen(file.path)}><strong>{fileLabel(file.path)}</strong><span>{file.content.length.toLocaleString('id-ID')} karakter</span></button>)}</div>
+    {shown && <section id="context-reader" className="context-reader" aria-label={fileLabel(shown.path)}><h3>{fileLabel(shown.path)}</h3><p className="context-path">{shown.path}</p>{shown.path.endsWith('.md') ? <ReadOnlyMarkdown text={shown.content}/> : <pre>{shown.content}</pre>}</section>}</div>}
+    </section>
+  </div>
 }

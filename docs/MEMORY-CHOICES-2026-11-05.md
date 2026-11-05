@@ -1,0 +1,15 @@
+# Pilihan memori per pesan — 5 November 2026
+
+Fase lanjutan setelah tinjauan konteks:
+- Setiap memori terpilih memiliki aksi Abaikan untuk pesan ini. Memori dikecualikan dapat dipulihkan dari panel yang sama. Aturan tidak memiliki aksi pengecualian.
+- Toggle Sertakan ringkasan percakapan berdiri sendiri dari pilihan memori tambahan. Mematikan Gunakan memori tetap menonaktifkan keduanya. Pilihan hanya mengatur catatan/ringkasan tambahan pada pesan; bukan penghapusan riwayat, private chat, atau tindakan melupakan fakta yang sudah ada dalam riwayat chat.
+- Ringkasan otomatis tetap mengikuti pengaturan agent. Tidak menyertakan ringkasan pada satu pesan tidak mematikan penyimpanan/ringkasan otomatis untuk percakapan selanjutnya.
+- Pilihan disimpan bersama tugas pada chat_inputs (migrasi013: excluded_memory_ids, use_summary) dan diterapkan kembali ketika antrean/retry berjalan. Pesan lama tetap menggunakan default yang kompatibel. Jejak mencatat judul memori yang dikecualikan dan status ringkasan.
+- Preview dan submit memvalidasi kepemilikan/cakupan, jenis memory, status aktif, format UUID, duplikasi dan kapasitas. ID aturan, brand lain, agent lain atau memori tak tersedia ditolak. Submit gagal sebelum tugas dibuat. UUID dinormalisasi sebelum dipakai dalam pemilihan.
+- Pengecualian diterapkan sebelum peringkat dan batas enam hasil sehingga kandidat relevan berikutnya dapat mengisi tempat yang tersedia. Aturan resmi tetap terpisah dan wajib. Aturan tambahan tetap mengikuti compiler dan batas catatan yang sudah ada.
+- Delegasi mewariskan pilihan ringkasan dan hanya ID pengecualian memori bersama brand. ID catatan pribadi Manager tidak diteruskan kepada spesialis. Pemilihan memori pribadi spesialis tetap berdasarkan scope dan brief tugasnya.
+- Setelah pesan berhasil dikirim, pengecualian dikosongkan dan penggunaan ringkasan dikembalikan ke default. Jika pengiriman gagal, pilihan tetap tersedia. Tersedia Atur ulang pilihan pesan untuk memperbaiki pilihan ketika sumber diubah/nonaktif sebelum submit.
+
+Batas: memori masih dicari dengan kecocokan kata; belum embedding/vector retrieval atau katalog plugin Hermes native. Perubahan/deaktivasi catatan saat antrean menunggu berlaku pada eksekusi; pilihan ini menyimpan ID, bukan salinan permanen isi catatan.
+
+Validasi akhir: 41 tes terkait lulus (28 integrasi Postgres office_test +13 unit/UI/regresi). Setelah perbaikan pemulihan fokus dan posisi gulir, ketiga tes UI panel diulang dan lulus. Lint file berubah, build produksi, TypeScript dan git diff --check lulus. QA browser desktop membuat satu memori contoh berlabel QA pada Content Creator OTCA, mengecualikan/memulihkan catatan, mengatur tanpa ringkasan dan mengirim satu chat melalui Hermes live. Jejak mencatat pengecualian dan pilihan ringkasan, serta composer kembali ke default. Memori contoh sudah dinonaktifkan, draft pengujian dibersihkan. Tidak mengubah aturan resmi. Bukti: tmp/memory-choices-preview.png dan tmp/memory-choices-evidence.png. Migrasi013 telah diterapkan pada API pengembangan lokal.

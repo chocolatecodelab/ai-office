@@ -1,5 +1,35 @@
 import { expect, it } from 'vitest'
 import { LiftQueue } from './lift-queue.ts'
+it('keeps a full crew queue inside the open lobby and routes overflow around the shaft wall',()=>{
+ const lift=new LiftQueue();lift.request('rider',1,0,0)
+ for(let i=0;i<17;i++)lift.request('q'+i,0,1,0)
+ const positions=Array.from({length:17},(_,i)=>lift.waitingPosition('q'+i,0))
+ for(const [i,a] of positions.entries()){
+  expect(a[0]).toBeLessThan(9.5);expect(a[2]).toBeLessThan(5.3)
+  for(const b of positions.slice(i+1))expect(Math.hypot(a[0]-b[0],a[2]-b[2])).toBeGreaterThanOrEqual(0.6)
+ }
+ expect(lift.waitingTarget('q4',[6,0,-3.6])).toEqual([6,0,-0.8])
+ expect(lift.waitingTarget('q0',[6.75,0,-0.8])).toEqual([6,0,-0.8])
+})
+it('spaces waiting passengers on their own floor instead of using the global FIFO index',()=>{
+ const lift=new LiftQueue()
+ lift.request('rider',0,1,0)
+ lift.request('floor-one',1,2,0);lift.request('floor-two',2,3,0);lift.request('floor-one-next',1,3,0)
+ const a=lift.waitingPosition('floor-one',3.4),b=lift.waitingPosition('floor-two',6.8),c=lift.waitingPosition('floor-one-next',3.4)
+ expect(a[2]).toBe(b[2]);expect(c[2]-a[2]).toBeCloseTo(0.65)
+ lift.release('floor-one');expect(lift.waitingPosition('floor-one-next',3.4)).toEqual(a)
+})
+it('releases the doorway in slot order with a real interval even when passengers arrive at different times',()=>{
+ const lift=new LiftQueue()
+ lift.request('a',0,2,0);lift.request('b',0,2,0);lift.request('c',0,2,0)
+ expect(lift.canExit('a',3)).toBe(false)
+ expect(lift.canExit('b',10)).toBe(false)
+ expect(lift.canExit('a',10)).toBe(true);expect(lift.canExit('a',10.1)).toBe(true)
+ lift.release('a')
+ expect(lift.canExit('b',11.2)).toBe(false);expect(lift.canExit('b',11.3)).toBe(true)
+ lift.release('b');lift.release('c')
+ expect(lift.request('new',1,0,20)).toBe(true);expect(lift.canExit('new',25)).toBe(true)
+})
 it('boards five passengers on the same trip and holds a sixth until everyone exits',()=>{
  const lift=new LiftQueue()
  for(let i=0;i<5;i++) expect(lift.request('p'+i,0,2,0)).toBe(true)

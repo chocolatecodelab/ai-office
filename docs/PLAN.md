@@ -1,5 +1,9 @@
 # Rancangan Pengembangan AI Office 3D OTCA
 
+> Revisi pengguna, 4 November 2026: tidak ada fitur/halaman Event mandiri. Akses pekerjaan event melalui AI Agent Event Specialist, termasuk chat, tugas, hasil, dan persetujuannya. Menu Event dihapus; tautan lama diarahkan ke Event Specialist di Office. Workflow/data event server yang sudah ada dipertahankan, bukan dibuat menjadi alur UI terpisah.
+
+> Status implementasi terbaru (4 November 2026): [perbandingan blueprint dan kode](STATUS-BLUEPRINT-2026-11-04.md). Lihat dokumen tersebut untuk membedakan fitur tersedia dari gerbang yang sudah teruji.
+
 Rencana kerja dari requirement sampai pilot, disusun dari **Blueprint AI Office 3D OTCA v3.1** dan paket
 **`context/`** (lihat `context/README.md`). Dokumen ini menjadi acuan Builder dan Brain; ubah lewat pull request.
 
@@ -26,8 +30,7 @@ landing page) berjalan lewat API resmi setelah approval. Kantor 3D menampilkan s
 | Ciao Manda | `ciaomanda` | Manager + Content Creator, Video Editor, Social Media Manager | TikTok, IG Reels | Lantai 3 · 4 meja |
 | Jepang Koey | `jepangkoey` | Manager + Content Creator, Video Editor, Social Media Manager | TikTok, IG Reels | Lantai 4 · 4 meja |
 
-Total **18 agent**: 4 Manager + 14 spesialis. Sister brand yang butuh iklan atau event mengirim brief ke Digital
-Marketing / Event Specialist OTCA.
+Total **18 agent**: 4 Manager + 14 spesialis. Keempat brand independen; setiap Manager hanya mengatur kru brand sendiri. Kebutuhan di luar kemampuan kru dikembalikan kepada pengguna, tanpa penerusan otomatis ke OTCA.
 
 **Di luar lingkup v1:**
 - budget iklan Meta/Google, Canva Pro, dan biaya Scalev;
@@ -71,7 +74,7 @@ Nomor `FR-xx` dipakai di roadmap dan PR.
 - **FR-01** Setiap brand punya satu container Hermes. Daftar agent aktif dibaca dari `context/brands/<slug>/agents.json`.
 - **FR-02** Prompt agent = `context/agents/<id>.md` + `context/_shared/*` + `context/brands/<slug>/*`. Agent tidak boleh mengarang isi bagian `[KONFIRMASI]`.
 - **FR-03** Manager menerima permintaan staf, mencari pemilik utama di `raci.md`, mendelegasikan, merangkum, lalu mengirim ke Approval yang tepat. Manager tidak mengerjakan pekerjaan spesialis.
-- **FR-04** Manager sister brand meneruskan kebutuhan iklan/event sebagai brief ke agent OTCA (`brief_to_otca`).
+- **FR-04 — dibatalkan, keputusan pengguna 5 November 2026.** Tidak ada kewajiban atau penerusan pekerjaan lintas brand ke OTCA. Setiap Manager mengatur brand sendiri; kebutuhan di luar kemampuan kru memerlukan keputusan pengguna.
 - **FR-05** Antar-agent hanya bertukar brief terstruktur (`content_brief`, `campaign_brief`, `event_brief`, `asset_handoff`, `approval_request`; lihat `docs/otca-agents.md`).
 - **FR-06** RACI: "Analisis feedback sales" dibedakan menurut tujuan, sama seperti Parents Talk. Insight konten milik Content Creator, insight marketing milik Digital Marketing (jawaban #2).
 
@@ -532,7 +535,7 @@ Dari blueprint L7 dan L6-05:
 Dari blueprint L2:
 - Skrip tambah-brand (< 15 menit) (L2-01).
 - `hermes-infojerman`, `hermes-ciaomanda`, `hermes-jepangkoey`, masing-masing Manager + Content Creator (L2-02).
-- Brief sister brand → Event Specialist / Digital Marketing OTCA (FR-04, L7-05).
+- Isolasi empat brand: Manager hanya mendelegasikan ke kru brand sendiri. FR-04/L7-05 lintas brand tidak diterapkan sesuai keputusan pengguna 5 November 2026.
 - Login Google SSO (L2-03), RBAC + Budget Approver + routing approval per jenis (L2-04).
 - Filter `brand_id` + tes akses silang (L2-05); dashboard biaya per brand + audit log (L2-06).
 - Brain/Pengguna: `brand.md` sister brand RESMI (L2-07), tabel user & peran (L2-08).
@@ -649,3 +652,24 @@ Setelah itu pilot 2 minggu (7–20 Jan 2027) dan retrospektif.
 
 Tidak ada yang menghambat L0. Yang akan muncul dari spike L0 (cara berbagi login Codex, jalur `api` ↔ Hermes)
 dicatat di `docs/spike-hermes.md` lalu dibawa ke dokumen ini.
+
+### Pembaruan 4 November 2026: orkestrasi Manager tahap awal
+Mode delegasi eksplisit kini membuat tugas anak spesialis yang persisten dalam brand yang sama, menunggu approval hasil, lalu membuat rangkuman Manager untuk approval akhir. Tersedia progress, validasi rencana, perlindungan duplikasi/restart, dan penanganan anak gagal/dibatalkan. Batasan: belum DAG dependensi atau handoff lintas brand; belum memenuhi seluruh FR-03–FR-05. QA menggunakan office_test dan Hermes simulasi (25 tes terkait lulus), build dan lint lulus. Lampiran, skill/connector dan pengelolaan memori relevan tetap pekerjaan berikutnya.
+
+### 5 November 2026 — Konteks chat agent
+Lampiran dokumen/gambar dan pemilih berkas, skill aplikasi per peran, connector baca berkas brand/Drive, jejak konteks, memori relevan berbasis kata, serta ringkasan percakapan yang dikendalikan pengguna telah diterapkan. Lihat docs/CHAT-WORKSPACE-2026-11-05.md untuk batas dan bukti pengujian. Plugin Hermes native, OCR scan dan penerusan lampiran ke delegasi belum termasuk.
+
+### 5 November 2026 — Tinjauan konteks sebelum mengirim
+Pengembangan chat dilanjutkan dengan tombol Tinjau konteks: sumber resmi yang dipilih, isi dan alasan pemilihan catatan, status ringkasan, serta pemisahan tool aplikasi dari panduan kerja. Preview baca-saja tidak membuat tugas atau memanggil Hermes. Hasil preview lama tidak ditampilkan sebagai hasil terkini setelah draft/pilihan berubah. Compiler catatan kini dipakai bersama oleh preview, prompt eksekusi, dan jejak jawaban; catatan yang melewati batas dilaporkan secara eksplisit. Referensi pembaruan: docs/CONTEXT-PREVIEW-2026-11-05.md. Status lampiran/PDF/Manager yang mutakhir mengikuti bagian paling akhir docs/CHAT-WORKSPACE-2026-11-05.md dan docs/CONTEXT-OPTIMIZATION-2026-11-05.md; batas enam halaman dan larangan handoff pada catatan awal telah digantikan.
+
+### 5 November 2026 — Pilihan memori per pesan
+Panel tinjauan sekarang dapat mengecualikan dan memulihkan memori individual serta memilih penggunaan ringkasan. Pilihan tersimpan pada tugas dan tercatat pada jawaban, menjaga aturan dan scope brand/agent. Delegasi meneruskan pengecualian memori bersama brand dan pilihan ringkasan; pilihan memori pribadi Manager tidak diteruskan. Lihat docs/MEMORY-CHOICES-2026-11-05.md.
+
+### 5 November 2026 — Prioritas blueprint: keramaian K4
+Celah penumpukan berkepanjangan ditangani melalui jarak antre per lantai, area tunggu lobi, keluar lift berurutan, dan pembatas langkah agent searah. Gerbang simulasi K4 kini lulus pada7 seed; bukan kelulusan seluruh blueprint. Ringkasan status FR-02–FR-05, batas simulasi dan gerbang berikutnya dicatat di docs/BLUEPRINT-PROGRESS-2026-11-05.md.
+
+### Koreksi keputusan pengguna — empat brand independen, 5 November 2026
+Official OTCA, Info Jerman, Ciao Manda dan Jepang Koey berdiri sendiri. Tidak ada kewajiban Manager sister brand ke OTCA. FR-04 dan alur lintas brand L7-05 tidak diterapkan; bukan backlog yang perlu dituntaskan. Ketentuan ini menggantikan uraian lintas brand pada catatan historis. Instruksi agent dan agents.json sudah diselaraskan. Lihat docs/BRAND-INDEPENDENCE-2026-11-05.md.
+
+### 5 November 2026 — Workflow Manager bertahap dalam brand
+FR-03/FR-05 dilanjutkan dengan dependsOn pada rencana Manager, gerbang hasil pendahulu yang disetujui, konteks asset_handoff berversi, cache hasil panjang, lease per tugas dan pembatalan tahapan pending. Paket mandiri tetap paralel, maksimal lima spesialis berbeda. Seluruh dependensi berada pada brand dan parent yang sama; tidak menghidupkan kembali FR-04 lintas brand. Detail dan batas: docs/MANAGER-WORKFLOW-2026-11-05.md.

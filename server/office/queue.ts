@@ -34,6 +34,7 @@ export class TaskQueue {
     this.worker = new Worker<JobData>(QUEUE, async (job) => {
       const outcome = await runTask(this.deps, job.data.brandId, job.data.taskId)
       if (outcome.next === 'retry') {
+        for(const child of outcome.children ?? [])await this.enqueue(child)
         const task = await this.deps.store.task(job.data.brandId, job.data.taskId)
         if (task) await this.enqueue(task, outcome.delayMs)
       }

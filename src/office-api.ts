@@ -7,6 +7,7 @@ export type TaskStatus = 'queued' | 'running' | 'waiting_quota' | 'waiting_appro
 export type AgentStatus = 'idle' | 'working' | 'waiting_quota' | 'waiting_approval' | 'revision' | 'error' | 'paused'
 
 export interface OfficeTask {
+  parentId?: string | null
   id: string; brandId: string; agentType: string; eventId: string | null; kind: string; title: string; brief: string
   priority: number; urgent: boolean; complex: boolean; status: TaskStatus; attempts: number
   result: string | null; error: string | null; retryAt: string | null; createdAt: string; updatedAt: string

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { NOTE_LIMITS, notesPrompt, validateNote, type AgentNote } from './agent-notes.js'
+import { compileNotes, NOTE_LIMITS, notesPrompt, validateNote, type AgentNote } from './agent-notes.js'
 
 const note = (patch: Partial<AgentNote>): AgentNote => ({ id: 'n', brandId: 'otca', agentType: null, kind: 'rule', title: 'Judul', body: 'Isi', active: true, createdBy: 'a', updatedBy: 'a', createdAt: '2026-11-04T01:00:00Z', updatedAt: '2026-11-04T01:00:00Z', ...patch })
 
@@ -22,6 +22,16 @@ describe('validateNote', () => {
 })
 
 describe('notesPrompt', () => {
+  it('reports exactly which notes fit and preserves memory relevance over recency', () => {
+    const ranked=[note({id:'best',kind:'memory',body:'a'.repeat(700),updatedAt:'2025-01-01'}),note({id:'recent',kind:'memory',body:'b'.repeat(700)}),note({id:'rule',body:'Review wajib'}),note({id:'inactive',active:false})]
+    const result=compileNotes(ranked,1200)
+    expect(result.included.map(n=>n.id)).toEqual(['rule','best'])
+    expect(result.omitted.map(n=>n.id)).toEqual(['recent'])
+    expect(result.text.length).toBeLessThanOrEqual(1200)
+    expect(result.text).not.toContain('b'.repeat(700))
+    expect(compileNotes(ranked,10).included).toEqual([])
+    expect(compileNotes(ranked,10).text).toBe('')
+  })
   it('is empty without active notes', () => {
     expect(notesPrompt([])).toBe('')
     expect(notesPrompt([note({ active: false })])).toBe('')

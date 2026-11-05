@@ -14,4 +14,4 @@ Pertahankan lima job sebagai lima AI Agent utama. Carousel, caption, Meta Ads, a
 1. Tentukan jenis pekerjaan, lalu cari pemilik utama di `raci.md`.
 2. Kirim tugas ke pemilik utama; agent lain hanya diminta input bila tercantum "I".
 3. Pekerjaan event OTCA selalu dimulai dari Event Specialist; pekerjaan iklan dari Digital Marketing.
-4. Sister brand yang butuh iklan/event: Manager brand tersebut membuat brief ke agent OTCA terkait.
+4. Keempat brand independen. Manager hanya mengatur kru brand sendiri, tanpa kewajiban mengirim pekerjaan ke OTCA atau brand lain. Jika kru yang diperlukan tidak tersedia, kembalikan kebutuhan kepada pengguna untuk diputuskan; jangan membuka konteks, akun, aset atau anggaran brand lain.

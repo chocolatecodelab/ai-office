@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import { formatDateTime } from '../format.ts'
 import {
   officeRequest, TASK_STATUS_LABELS, useOfficeLive,
@@ -17,8 +17,8 @@ const DETAIL_FIELDS: Array<[keyof EventDetails, string, string]> = [
   ['harga', 'Harga', 'Gratis / Rp…'],
   ['narasumber', 'Narasumber', 'Nama dan peran'],
   ['target', 'Target peserta', 'Orang tua siswa SMA'],
-  ['objective', 'Objective', 'Pendaftaran konsultasi'],
-  ['benefit', 'Benefit', 'E-book, sesi tanya jawab'],
+  ['objective', 'Tujuan', 'Pendaftaran konsultasi'],
+  ['benefit', 'Manfaat', 'E-book, sesi tanya jawab'],
 ]
 
 function StatusBadge({ stage }: { stage: EventStage }) {
@@ -70,16 +70,20 @@ function NewEventForm({ onCreated }: { onCreated: (event: OfficeEvent) => void }
   const [brief, setBrief] = useState('')
   const [details, setDetails] = useState<EventDetails>({})
   const [error, setError] = useState<string>()
+  const [busy,setBusy]=useState(false)
+  const submitting=useRef(false)
   const submit = async (event: FormEvent) => {
     event.preventDefault()
+    if(submitting.current || !title.trim())return
+    submitting.current=true;setBusy(true);setError(undefined)
     try {
-      onCreated(await officeRequest<OfficeEvent>('POST', `/brands/${BRAND}/events`, { title, brief, details }))
+      onCreated(await officeRequest<OfficeEvent>('POST', `/brands/${BRAND}/events`, { title:title.trim(), brief:brief.trim(), details }))
       setTitle(''); setBrief(''); setDetails({}); setError(undefined)
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : String(failure))
-    }
+    } finally {submitting.current=false;setBusy(false)}
   }
-  return <form className="card office-form" onSubmit={(event) => void submit(event)}>
+  return <form aria-busy={busy} className="card office-form" onSubmit={(event) => void submit(event)}>
     <h2>Event baru</h2>
     <label className="office-field"><span>Nama event</span><input className="search-input" value={title} onChange={(event) => setTitle(event.target.value)} required placeholder="Parents Talk: Persiapan Kuliah di Jerman"/></label>
     <label className="office-field"><span>Brief (kebutuhan, insight Parents Talk, catatan)</span><textarea rows={4} value={brief} onChange={(event) => setBrief(event.target.value)}/></label>
@@ -89,7 +93,7 @@ function NewEventForm({ onCreated }: { onCreated: (event: OfficeEvent) => void }
         <input className="search-input" value={details[key] ?? ''} placeholder={placeholder} onChange={(event) => setDetails({ ...details, [key]: event.target.value })}/></label>)}
     </div>
     {error && <p className="text-bad" role="alert">{error}</p>}
-    <button type="submit" className="primary-button">Buat event</button>
+    <button type="submit" className="primary-button" disabled={busy || !title.trim()}>{busy ? 'Membuat event…' : 'Buat event'}</button>
   </form>
 }
 
@@ -99,22 +103,28 @@ export function Events() {
   const [detail, setDetail] = useState<EventDetail>()
   const [status, setStatus] = useState<OfficeStatus>()
   const [error, setError] = useState<string>()
+  const generation=useRef(0)
+  const invalidate=useCallback(()=>{generation.current+=1},[])
 
   const load = useCallback(async () => {
+    const request=++generation.current
     try {
       const [list, office] = await Promise.all([officeRequest<OfficeEvent[]>('GET', `/brands/${BRAND}/events`), officeRequest<OfficeStatus>('GET', '/status')])
+      const current = selected ?? list[0]?.id
+      const next=current ? await officeRequest<EventDetail>('GET', `/brands/${BRAND}/events/${current}`) : undefined
+      if(request!==generation.current)return
       setEvents(list)
       setStatus(office)
-      const current = selected ?? list[0]?.id
       if (current !== selected) setSelected(current)
-      setDetail(current ? await officeRequest<EventDetail>('GET', `/brands/${BRAND}/events/${current}`) : undefined)
+      setDetail(next)
       setError(undefined)
     } catch (failure) {
+      if(request!==generation.current)return
       setError(failure instanceof Error ? failure.message : String(failure))
     }
   }, [selected])
 
-  useEffect(() => { void load() }, [load])
+  useEffect(() => { void load();return invalidate }, [load,invalidate])
   useOfficeLive(BRAND, () => { void load() })
 
   const act = async (work: () => Promise<unknown>) => {
@@ -128,12 +138,12 @@ export function Events() {
     {mock.length > 0 && <section className="notice"><strong>Mode mock:</strong> {mock.map((item) => item.label).join(', ')}. {mock.find((item) => item.service === 'drive')?.note}</section>}
     <div className="office-grid">
       <aside className="office-sidebar">
-        <NewEventForm onCreated={(event) => { setSelected(event.id); void load() }}/>
+        <NewEventForm onCreated={(event) => { setDetail(undefined);setSelected(event.id) }}/>
         <div className="card">
           <h2>Daftar event</h2>
           {events?.length === 0 && <p className="muted">Belum ada event.</p>}
           <ul className="event-list">{events?.map((event) => <li key={event.id}>
-            <button type="button" className={`chip chip-button${event.id === selected ? ' active' : ''}`} onClick={() => setSelected(event.id)}>{event.title}</button>
+            <button type="button" className={`chip chip-button${event.id === selected ? ' active' : ''}`} onClick={() => {setDetail(undefined);setSelected(event.id)}}>{event.title}</button>
           </li>)}</ul>
         </div>
       </aside>

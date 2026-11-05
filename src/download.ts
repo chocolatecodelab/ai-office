@@ -10,5 +10,7 @@ export function downloadText(fileName: string, content: string, type = 'text/pla
 
 /** A file's size as staff read it. */
 export function sizeLabel(bytes: number): string {
+  if(bytes>=1024**3)return `${(bytes/1024**3).toFixed(1)} GB`
+  if(bytes>=1024**2)return `${(bytes/1024**2).toFixed(1)} MB`
   return bytes < 1024 ? `${bytes} B` : `${(bytes / 1024).toFixed(1)} KB`
 }
