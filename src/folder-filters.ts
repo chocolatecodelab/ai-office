@@ -2,8 +2,8 @@ import { AGENT_NAMES, type AssetItem } from './office-api.ts'
 
 // Filtering and sorting of the Folders list. The list is small (a few hundred rows), so it is done in the page.
 
-export type FileKind = 'pdf' | 'doc' | 'data' | 'web' | 'subtitle' | 'reply'
-export const KIND_LABELS: Record<FileKind, string> = { pdf: 'PDF', doc: 'Dokumen', data: 'Data', web: 'Web', subtitle: 'Subtitel', reply: 'Balasan' }
+export type FileKind = 'pdf' | 'image' | 'doc' | 'data' | 'web' | 'subtitle' | 'reply'
+export const KIND_LABELS: Record<FileKind, string> = { pdf: 'PDF', image:'Gambar', doc: 'Dokumen', data: 'Data', web: 'Web', subtitle: 'Subtitel', reply: 'Balasan' }
 export const KINDS = Object.keys(KIND_LABELS) as FileKind[]
 
 export type Period = 'all' | '1d' | '7d' | '30d'
@@ -21,6 +21,7 @@ export function fileKind(asset: Pick<AssetItem, 'kind' | 'name'>): FileKind {
   if (asset.kind !== 'artifact') return 'reply'
   const extension = asset.name?.split('.').pop()?.toLowerCase() ?? ''
   if (extension === 'pdf') return 'pdf'
+  if (extension === 'png') return 'image'
   if (extension === 'csv' || extension === 'json') return 'data'
   if (extension === 'html') return 'web'
   if (extension === 'srt' || extension === 'vtt') return 'subtitle'

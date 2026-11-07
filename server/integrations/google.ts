@@ -11,7 +11,7 @@ const REVOKE_URL = 'https://oauth2.googleapis.com/revoke'
 const USERINFO_URL = 'https://openidconnect.googleapis.com/v1/userinfo'
 const DRIVE_URL = 'https://www.googleapis.com/drive/v3'
 
-export const DRIVE_SCOPES = ['openid', 'email', 'https://www.googleapis.com/auth/drive.readonly']
+export const DRIVE_SCOPES = ['openid', 'email', 'https://www.googleapis.com/auth/drive']
 
 export interface Pkce { verifier: string; challenge: string }
 export function pkce(): Pkce {

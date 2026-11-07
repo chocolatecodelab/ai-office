@@ -1,3 +1,4 @@
+import { PaginatedItems } from '../components/PaginatedItems.tsx'
 import { useState } from 'react'
 import { formatDateTime } from '../format.ts'
 import { AGENT_NAMES, TASK_STATUS_LABELS, type ActivityItem } from '../office-api.ts'
@@ -51,7 +52,7 @@ export function Activity() {
         <span className="toolbar-count">{visible.length} dari {activity.data.length}</span>
       </div>
       {visible.length===0 && <EmptyState title="Tidak ada aktivitas yang cocok">Ubah kata pencarian atau pilih brand lain.</EmptyState>}
-      <ol className="activity-timeline" aria-label="Riwayat aktivitas">{visible.map((item, index) => <li key={`${item.at}-${item.action}-${item.title}-${index}`}>
+      <PaginatedItems items={visible} scope={brandId+"/"+query} label="aktivitas">{rows=><ol className="activity-timeline" aria-label="Riwayat aktivitas">{rows.map((item, index) => <li key={`${item.at}-${item.action}-${item.title}-${index}`}>
         <div className="activity-marker" aria-hidden="true"/>
         <article><div className="activity-entry-heading"><span className="activity-brand">{item.brandName}</span><time dateTime={item.at}>{formatDateTime(item.at)}</time></div>
         <h2>{item.title?.trim() || (ACTION_TEXT[item.action] ? describe(item) : 'Aktivitas sistem')}</h2>
@@ -60,7 +61,7 @@ export function Activity() {
         <p className="activity-actor">Oleh {actorText(item.actor)}</p>
         {!ACTION_TEXT[item.action] && item.kind!=='status' && <details><summary>Detail aktivitas</summary><code>{item.action}</code></details>}
         </article>
-      </li>)}</ol>
+      </li>)}</ol>}</PaginatedItems>
     </>}
   </div>
 }

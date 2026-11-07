@@ -2,6 +2,9 @@ import { useEffect, useRef, useState } from 'react'
 import { formatTime } from './format.ts'
 import { NavigationIcon } from './components/NavigationIcon.tsx'
 import './workspace.css'
+import './review.css'
+import './chat-layout.css'
+import './controls.css'
 import { Activity } from './pages/Activity.tsx'
 import { Agents } from './pages/Agents.tsx'
 import { Approvals } from './pages/Approvals.tsx'
@@ -79,7 +82,7 @@ function Shell({ onRefresh, access, onAccessChange }: { onRefresh: () => void; a
     setMenuOpen(false)
     window.scrollTo?.({ top: 0 })
   }
-  const labels:Record<Page,string>={Office:'Kantor',Approval:'Persetujuan',Agents:'Agent',Usage:'Pemakaian', 'Task Board':'Papan tugas',Calendar:'Kalender',Activity:'Aktivitas',Memory:'Memori',Folders:'Berkas',Logs:'Log sistem',Settings:'Pengaturan'}
+  const labels:Record<Page,string>={Office:'Kantor',Approval:'Review hasil',Agents:'Agent',Usage:'Pemakaian', 'Task Board':'Papan tugas',Calendar:'Kalender',Activity:'Aktivitas',Memory:'Memori',Folders:'Berkas',Logs:'Log sistem',Settings:'Pengaturan'}
   const syncLabel = data ? `Diperbarui ${formatTime(data.fetchedAt)}${dashboard.status === 'ready' && dashboard.stale ? ' · Data terakhir' : ''}` : dashboard.status === 'failed' ? 'Koneksi terganggu' : 'Menghubungkan…'
 
   const alerts = (data && data.commands.failed > 0 ? 1 : 0)

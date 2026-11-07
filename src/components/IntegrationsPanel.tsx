@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { DriveLibrarySettings } from './ApprovedDelivery.tsx'
 import { officeRequest, type IntegrationMode, type OfficeIntegrations } from '../office-api.ts'
 import { usePolling } from '../polling.ts'
 import { EmptyState, LoadingState } from '../ui.tsx'
@@ -46,7 +47,7 @@ export function IntegrationsPanel() {
   if (data.status === 'failed') return <EmptyState title="Belum tersedia">Daftar integrasi belum bisa dibaca. {data.message}</EmptyState>
 
   const { services, brands, redirectUri, encryptionReady } = data.data
-  const connectedCount = services.filter((service) => service.oneClick ? brands.some((brand) => service.modes[brand.id].account?.status === 'active') : service.connected).length
+  const connectedCount = services.filter((service) => service.perBrand?brands.some(brand=>service.modes[brand.id].ready):service.oneClick ? brands.some((brand) => service.modes[brand.id].account?.status === 'active') : service.connected).length
   const note = (key: string, text: string) => setNotes((current) => ({ ...current, [key]: text }))
   const run = async (key: string, work: () => Promise<void>) => {
     setBusy(key); setError(undefined)
@@ -75,6 +76,10 @@ export function IntegrationsPanel() {
   const copy = async (text: string) => { try { await navigator.clipboard.writeText(text); note('copied', 'Tersalin.') } catch { note('copied', 'Salin manual.') } }
 
   const statusOf = (service: Service): { label: string; tone: 'ok' | 'ready' | 'off' } => {
+    if(service.perBrand){
+      const ready=brands.filter(brand=>service.modes[brand.id].ready).length
+      return {label:ready?`Konfigurasi siap · ${ready} brand`:'Belum dikonfigurasi',tone:ready?'ready':'off'}
+    }
     if (service.oneClick) {
       const active = brands.filter((brand) => service.modes[brand.id].account?.status === 'active').length
       if (active) return { label: `Terhubung · ${active} brand`, tone: 'ok' }
@@ -110,7 +115,7 @@ export function IntegrationsPanel() {
           </ol>}
           {service.connected && !service.oneClick && <p className="integ-ok">Semua variabel terisi: {service.vars.map((name) => <code key={name} className="filled">{name}</code>)}</p>}
           {service.connected && service.oneClick && !encryptionReady && <p className="form-error" role="alert">Kunci enkripsi token belum ada. Jalankan <code>node scripts/setup-env.mjs</code>, lalu Periksa ulang.</p>}
-          {service.connected && service.oneClick && encryptionReady && <p className="integ-ok">OAuth siap. Hubungkan akun untuk tiap brand; izin hanya baca.</p>}
+          {service.connected && service.oneClick && encryptionReady && <p className="integ-ok">OAuth siap. Hubungkan akun untuk tiap brand agar pustaka konten dapat dibaca dan paket Approved dapat diunggah.</p>}
           <div className="integ-actions">
             <button type="button" className="refresh-button" disabled={busy === `check/${service.service}`} onClick={() => void recheck(service)}>Periksa ulang</button>
             {notes[service.service] && <span role="status" className="muted">{notes[service.service]}</span>}
@@ -121,9 +126,10 @@ export function IntegrationsPanel() {
               const mode = service.modes[brand.id]
               const account = mode.account
               const key = `${service.service}/${brand.id}`
-              const ready = service.oneClick ? account?.status === 'active' : service.connected
+              const ready = service.perBrand?mode.ready:service.oneClick ? account?.status === 'active' : service.connected
               return <div className="integ-brand" key={brand.id}>
                 <span className="integ-brand-name">{brand.name}</span>
+                {service.perBrand&&<small>{mode.ready?'Konfigurasi publikasi tersedia. Uji akun pada persiapan publikasi.':`Lengkapi di infra/env/integrations.env: ${(mode.missing??[]).join(', ')}`}</small>}
                 {service.oneClick && <div className="integ-account">
                   {account ? <span className={account.status === 'active' ? 'integ-ok-text' : 'integ-warn-text'}>{account.status === 'active' ? `Terhubung · ${account.email}` : `Perlu dihubungkan ulang · ${account.email}`}</span> : <span className="muted">Belum terhubung</span>}
                   <span className="integ-account-actions">
@@ -144,6 +150,7 @@ export function IntegrationsPanel() {
                   </select>
                   {mode.effective !== mode.requested && <small>berjalan sebagai {mode.effective}</small>}
                 </label>
+                {service.service==='drive'&&account?.status==='active'&&<DriveLibrarySettings brand={brand.id}/>}
               </div>
             })}
             {!service.connected && <small className="integ-note">Live terbuka setelah akun terhubung.</small>}

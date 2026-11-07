@@ -456,13 +456,20 @@
 .work-page-heading > button { flex-shrink:0; }
 .board-status-filter { display:flex; align-items:center; gap:12px; font-size:13px; margin-top:16px; }
 .board-status-filter select,.task-recipient select,.office-team-floor select { padding:10px 12px; color:var(--text); background:var(--surface); border:1px solid var(--border-strong); border-radius:8px; font:inherit; min-width:0; }
-.work-board.filtered { grid-template-columns:minmax(0,1fr); grid-auto-flow:row; }
+.work-board { grid-auto-columns:360px; gap:18px; padding-bottom:18px; }
+.work-board > .column { min-width:0; padding:12px; scrollbar-gutter:stable; }
+.work-board > .column .column-head { margin:-12px -12px 0; padding:16px 14px 12px; top:-12px; gap:12px; }
+.work-board .column-head .eyebrow { font-size:12px; letter-spacing:.06em; line-height:1.5; }
+.work-board.filtered { grid-template-columns:minmax(0,640px); grid-auto-columns:auto; grid-auto-flow:row; }
 .work-board.filtered > .column { max-height:none; }
 .task-open { background:transparent; border:0; padding:0; color:var(--text); font:600 14px/1.5 var(--font-ui); text-align:left; cursor:pointer; overflow-wrap:anywhere; }
 .task-open:hover { color:var(--accent); text-decoration:underline; }
-.work-board .task-card { padding:16px; gap:10px; }
+.work-board .task-card { padding:18px; gap:12px; margin-top:12px; border-radius:12px; min-width:0; }
+.work-board .task-open { font-size:14px; line-height:1.55; display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:3; overflow:hidden; }
+.work-board .task-text { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:3; overflow:hidden; overflow-wrap:anywhere; margin:0; font-size:12px; line-height:1.6; }
 .work-board .task-meta { margin:0; font-size:12px; line-height:1.5; }
 .work-board .task-card .toolbar { margin:0; }
+.work-board .task-card .toolbar button { white-space:nowrap; font-size:12px; min-height:36px; }
 .task-created-notice { color:var(--text); border-left:3px solid var(--accent); padding:12px 16px; }
 .office-backdrop .task-composer,.office-backdrop .task-detail-dialog { background:var(--surface); color:var(--text); border-color:var(--border-strong); max-width:800px; width:min(800px,100%); padding:28px; }
 .task-composer header,.task-detail-dialog > header { display:block; height:auto; padding:0 40px 16px 0; margin:0; border:0; background:transparent; }
@@ -795,6 +802,34 @@
 .office-agent-panel .chat-empty-hint h3 { font-size:20px; line-height:1.4; margin:0 0 12px; }
 .office-agent-panel .chat-empty-hint p { font-size:13px; line-height:1.7; }
 .office-agent-panel .chat-messages-area { padding-top:16px; }
+/* Messaging density is scoped to chat; document readers keep their reading scale. */
+.office-agent-panel.is-chat .office-panel-heading { padding-top:10px; padding-bottom:10px; }
+.office-agent-panel.is-chat .office-panel-heading h2 { font-size:17px; }
+.office-agent-panel.is-chat .office-panel-heading :is(small,span) { font-size:11px; }
+.office-agent-panel .chat-messages-area { padding:8px 6px 16px 0; }
+.office-agent-panel .chat-messages-area > .chat-turn { margin-bottom:16px; }
+.office-agent-panel .chat-turn .chat-bubble-row { margin-bottom:8px; }
+.office-agent-panel .chat-turn .chat-bubble { width:fit-content; max-width:min(88%,65ch); padding:9px 12px; border-radius:12px; border-color:var(--border); font:400 13px/1.55 var(--font-ui); }
+.office-agent-panel .chat-turn .user-bubble { background:var(--surface-2); border-bottom-right-radius:3px; }
+.office-agent-panel .chat-turn .agent-bubble { border-left:1px solid var(--border); border-bottom-left-radius:3px; }
+.office-agent-panel .chat-turn .bubble-header { gap:12px; margin-bottom:5px; font:500 10px/1.4 var(--font-ui); }
+.office-agent-panel .chat-turn .bubble-header > span:first-child { color:var(--accent); }
+.office-agent-panel .chat-reply-status { margin-left:auto; font-weight:400; }
+.office-agent-panel .chat-turn .bubble-content,
+.office-agent-panel .chat-turn .readable-markdown { font:inherit; color:var(--text); line-height:1.55; }
+.office-agent-panel .chat-turn .readable-markdown p { margin:0 0 8px; font:inherit; }
+.office-agent-panel .chat-turn .readable-markdown strong { font:inherit; font-weight:600; }
+.office-agent-panel .chat-turn .readable-markdown :is(h4,h5,h6) { font:600 14px/1.5 var(--font-ui); margin:14px 0 6px; }
+.office-agent-panel .chat-turn .readable-markdown li { margin-bottom:4px; font:inherit; }
+.office-agent-panel .chat-turn .readable-markdown :is(ul,ol) { padding-left:20px; margin:6px 0; }
+.office-agent-panel .chat-turn .readable-markdown pre { padding:10px; margin:8px 0; font-size:12px; }
+.office-agent-panel .chat-turn .markdown-table { margin:8px 0; }
+.office-agent-panel .chat-turn .markdown-table :is(th,td) { padding:7px; font-size:12px; }
+.office-agent-panel .bubble-footer { display:flex; justify-content:flex-end; margin-top:4px; color:var(--text-muted); font-size:10px; line-height:1.4; }
+.office-agent-panel .chat-turn .chat-evidence { margin-top:10px; padding-top:8px; font-size:10px; }
+.office-agent-panel .chat-turn .chat-remember { margin-top:6px; }
+.office-agent-panel .chat-turn .chat-remember > button { font-size:10px; min-height:32px; padding:5px 8px; }
+.office-agent-panel.is-chat .chat-input-bar > textarea { font:400 13px/1.55 var(--font-ui); }
 @media(max-width:600px) {
  .office-agent-panel[open] { width:calc(100vw - 16px); height:calc(100dvh - 16px); max-height:calc(100dvh - 16px); }
  .office-agent-panel .office-panel-heading { padding:10px 12px; }
@@ -805,3 +840,48 @@
  .office-agent-panel .chat-icon-button,.office-agent-panel .chat-input-bar .chat-icon-button { width:40px; height:40px; min-height:40px; }
  .office-agent-panel .manager-chat-mode { font-size:10px; gap:4px; }
 }
+/* Production tools share the agent workspace's spacing and typography. */
+.agent-production{border:1px solid var(--line,#555);border-radius:12px;margin-bottom:20px;overflow:hidden}
+.agent-production>summary{display:flex;justify-content:space-between;gap:16px;cursor:pointer;padding:16px;font-weight:600}
+.agent-production>summary small{font-weight:400;font-size:12px}
+.agent-production-body{padding:0 16px 16px;font-size:13px;line-height:1.5}
+.agent-production-body form{display:grid;gap:14px;margin:16px 0}
+.agent-production-body label{display:grid;gap:6px}
+.agent-production-body :is(input,textarea,select){width:100%;min-width:0;box-sizing:border-box;font:inherit}
+.agent-production-body textarea{resize:vertical}
+.agent-production-jobs{display:grid;gap:10px;margin-top:16px}
+.agent-production-jobs article{border-top:1px solid var(--line,#555);padding-top:12px;display:grid;gap:5px}
+.agent-production-jobs span,.agent-production-jobs small{font-size:12px}
+.agent-produced-image{display:block;width:100%;height:auto;max-height:65vh;object-fit:contain;border-radius:8px;margin-top:16px}
+.agent-production{border-color:var(--border)}
+.agent-production-body :is(input:not([type=file]),textarea,select){background:var(--surface-2);color:var(--text);border:1px solid var(--border-strong);border-radius:8px;padding:10px 12px;min-height:42px}
+.agent-production-body input[type=file]{color:var(--text-muted);font-size:12px}
+.agent-production-body input[type=file]::file-selector-button{background:var(--surface-2);color:var(--text);border:1px solid var(--border-strong);border-radius:6px;padding:8px 12px;margin-right:10px;cursor:pointer}
+.agent-production-body :is(input,textarea,select):focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.agent-production-body small,.agent-production>summary small{color:var(--text-muted)}
+.chat-rendered-gallery{display:flex;gap:12px;overflow-x:auto;max-width:100%;padding:8px 0 12px;scroll-snap-type:x proximity}
+.chat-rendered-gallery figure{margin:0;flex:0 0 min(220px,75vw);min-width:0;scroll-snap-align:start}
+.chat-rendered-gallery img{display:block;width:100%;aspect-ratio:4/5;object-fit:contain;background:var(--surface-2);border-radius:8px}
+.chat-rendered-gallery figcaption{display:flex;justify-content:space-between;gap:8px;padding-top:7px;font:11px/1.4 var(--font-ui)}
+.chat-rendered-gallery figcaption a{color:var(--accent);text-underline-offset:3px}
+
+.chat-production-extras{margin-top:8px;font-size:12px}
+.chat-production-extras>summary{padding:8px 0;cursor:pointer;color:var(--text-muted)}
+
+
+/* File thumbnails show the full slide, with no text-preview fade over the image. */
+.fb-thumb:has(>.fb-thumbnail-image){padding:0;background:var(--surface-2)}
+.fb-thumb:has(>.fb-thumbnail-image)::after{display:none}
+.fb-thumbnail-image{display:block;width:100%;height:100%;object-fit:contain}
+.fb-pagination{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin:24px 0 0;padding:16px 0;border-top:1px solid var(--border);font-size:12px}
+.fb-pagination label,.fb-pagination>div{display:flex;align-items:center;gap:12px}.fb-pagination select{font:inherit;padding:8px;color:var(--text);background:var(--surface);border:1px solid var(--border-strong);border-radius:6px}.fb-pagination button{min-height:36px;font-size:12px}.fb-pagination span{white-space:nowrap}@media(max-width:500px){.fb-pagination>div{width:100%;justify-content:space-between;gap:8px}}
+/* Document viewer: separate toolbar, canvas and page margins. */
+.office-backdrop .office-detail.fb-dialog{width:min(1200px,100%);max-width:1200px;padding:24px;gap:16px;overflow:hidden}
+.fb-dialog .fb-dialog-head{flex:none;margin:0;padding-right:52px}
+.fb-dialog .fb-dialog-head h2{font-size:20px;line-height:1.4;color:var(--text)}
+.fb-dialog .fb-dialog-head p{line-height:1.6;margin-top:6px}
+.fb-dialog .fb-actions{display:flex;flex-wrap:wrap;gap:8px;flex:none;margin:0;padding-bottom:4px}
+.fb-dialog .fb-stage{overflow:auto;background:var(--surface-3);border-radius:10px}
+.fb-dialog .fb-content{margin:0;padding:28px;line-height:1.7;width:100%;overflow:auto}
+.fb-dialog .fb-stage>.agent-produced-image{object-fit:contain;max-width:100%;max-height:100%;margin:auto;padding:20px}
+@media(max-width:720px){.office-backdrop .office-detail.fb-dialog{padding:16px;gap:12px}.fb-dialog .fb-dialog-head h2{font-size:16px}.fb-dialog .fb-dialog-head p{font-size:11px}.fb-dialog .fb-content{padding:20px}}

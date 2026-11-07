@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import type { ProductionConfig } from './office/production-engines.js'
 
 // Where the office finds Postgres, Redis and each brand's Hermes. On the VPS these come from the
 // environment (OFFICE_DATABASE_URL, OFFICE_REDIS_URL, HERMES_<SLUG>_URL / _KEY). In local development
@@ -37,6 +38,7 @@ export interface OfficeSettings {
   langfuse?: LangfuseConfig
   /** Model table for the agents: dev runs everything on Codex, prod adds the Claude pools (server/office/model-routes.ts). */
   engineProfile: 'dev' | 'prod'
+  production?: ProductionConfig
 }
 
 /** Langfuse keys for the usage view: the environment first, then observability.env, then Hermes' copy. */
@@ -52,6 +54,7 @@ function langfuseConfig(env: NodeJS.ProcessEnv, envDir: string): LangfuseConfig 
 export function officeSettings(env: NodeJS.ProcessEnv = process.env, root = REPO_ROOT): OfficeSettings {
   const envDir = join(root, 'infra', 'env')
   const postgres = readEnvFile(join(envDir, 'postgres.env'))
+  const production=readEnvFile(join(envDir,'production.env'))
   const localDatabase = postgres.POSTGRES_PASSWORD
     ? `postgresql://${postgres.POSTGRES_USER || 'office'}:${encodeURIComponent(postgres.POSTGRES_PASSWORD)}@127.0.0.1:15432/${postgres.POSTGRES_DB || 'office'}`
     : undefined
@@ -61,6 +64,7 @@ export function officeSettings(env: NodeJS.ProcessEnv = process.env, root = REPO
     litellmUrl: env.LITELLM_URL || 'http://127.0.0.1:14000',
     filesDir: env.RUANG_FILES_DIR || join(root, 'data', 'files'),
     envDir,
+    production:{contentRoot:env.OFFICE_CONTENT_ENGINE_ROOT||production.OFFICE_CONTENT_ENGINE_ROOT,videoRoot:env.OFFICE_VIDEO_ENGINE_ROOT||production.OFFICE_VIDEO_ENGINE_ROOT,browserDir:env.OFFICE_CONTENT_BROWSER_DIR||production.OFFICE_CONTENT_BROWSER_DIR,workDir:env.OFFICE_PRODUCTION_DIR||production.OFFICE_PRODUCTION_DIR||join(root,'data','production')},
     langfuse: langfuseConfig(env, envDir),
     engineProfile: env.ENGINE_PROFILE === 'prod' ? 'prod' : 'dev',
     hermes(brand) {

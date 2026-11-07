@@ -1908,10 +1908,10 @@ h3.notes-official, h2.notes-official { margin-top: 20px; }
 .integ-brand label { display: grid; gap: 4px; max-width: 280px; }
 
 /* ---- OTCA brand layer (docs/DESIGN.md) ----
-   Black, solid gold #CB9D31 and white; Montserrat throughout (code stays monospace); rounded cards on a quiet page;
+   Black, solid gold #CB9D31 and white; Plus Jakarta Sans throughout (code stays monospace); rounded cards on a quiet page;
    the gold gradient line as the one decorative element. Light mode is paper white with the gold darkened for contrast. */
 :root {
-  --font-ui: 'Montserrat', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-ui: 'Plus Jakarta Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font-label: var(--font-ui);
   --font-code: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --gold: #cb9d31;
@@ -1923,13 +1923,13 @@ h3.notes-official, h2.notes-official { margin-top: 20px; }
 }
 :root[data-theme="light"] { --gold: #8a6410; --shadow: 0 1px 2px rgba(20, 16, 4, .05), 0 10px 28px rgba(20, 16, 4, .07); --on-gold: #fff; }
 html, body, button, input, select, textarea { font-family: var(--font-ui); }
-body { font-weight: 500; letter-spacing: 0; }
+body { font-weight: 400; letter-spacing: 0; }
 code, pre, kbd, samp, .fb-content, .chat-file-body, .office-result, .integ code { font-family: var(--font-code); }
 .app { background: var(--c-101311); }
 
 /* Headings: gold, ExtraBold */
 h1 { color: var(--gold); font-weight: 800; letter-spacing: -.03em; line-height: 1.05; font-size: clamp(34px, 4.6vw, 56px); margin-bottom: 14px; }
-h2, h3 { font-weight: 700; letter-spacing: -.01em; }
+h2, h3 { font-weight: 600; letter-spacing: -.01em; }
 .page-title { padding: 40px 0 26px; }
 .eyebrow { color: var(--gold); font-weight: 700; letter-spacing: .14em; }
 strong { font-weight: 700; }

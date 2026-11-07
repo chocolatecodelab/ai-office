@@ -6,6 +6,7 @@ import { chatSkills, selectedSkills, skillExecution } from './chat-skills.js'
 import { agentContextFiles } from '../otca-context.js'
 import { selectOfficialContext } from './context-policy.js'
 import { validateMemoryChoices } from './memory-choices.js'
+import { videoUploadLimit } from './video-attachments.js'
 
 const DRIVE='https://www.googleapis.com/drive/v3/files'
 const driveId=(id:string)=>{if(!/^[a-zA-Z0-9_-]{1,200}$/.test(id))throw new Error('ID Drive tidak valid.');return id}
@@ -25,6 +26,10 @@ export function installChatRoutes(router:Router,services:Promise<OfficeServices>
   type Owner=Awaited<ReturnType<typeof owner>>
   const handle=(work:(o:Owner,r:Request)=>Promise<unknown>)=>async(r:Request,s:Response)=>{try{s.json(await work(await owner(r),r))}catch(e){s.status(400).json({error:e instanceof Error?e.message:String(e)})}}
   const base='/brands/:brand/agents/:agent'
+  router.post(`${base}/video-attachments`,handle(async(o,r)=>{
+    const length=r.get('Content-Length')
+    return o.office.videoAttachments.upload(o.brand,o.agent,decodeURIComponent(r.get('X-File-Name')??''),r,length?Number(length):undefined)
+  }))
   router.post(`${base}/context-preview`,handle(async(o,r)=>{
     const message=r.body?.message
     if(typeof message!=='string' || !message.trim() || message.length>12000)throw new Error('Tulis pesan 1–12.000 karakter untuk meninjau konteks.')
@@ -43,13 +48,23 @@ export function installChatRoutes(router:Router,services:Promise<OfficeServices>
     if(!Buffer.isBuffer(r.body))throw new Error('Kirim berkas sebagai data biner.')
     return o.chat.upload(o.brand,o.agent,decodeURIComponent(r.get('X-File-Name')??''),r.body)
   }))
-  router.delete(`${base}/attachments/:id`,handle(async(o,r)=>o.chat.removeAttachment(o.brand,o.agent,String(r.params.id))))
+  router.delete(`${base}/attachments/:id`,handle(async(o,r)=>{
+    const result=await o.chat.removeAttachment(o.brand,o.agent,String(r.params.id))
+    await o.office.videoAttachments.cleanupRemoved(o.brand,o.agent,String(r.params.id))
+    return result
+  }))
   router.get(`${base}/attachments/:id/file`,async(r,s)=>{
     try {
       const o=await owner(r),task=typeof r.query.task==='string'?await o.office.store.task(o.brand,r.query.task):undefined
       if(r.query.task && (!task || task.agentType!==o.agent))throw new Error('Tugas bukan milik agent ini.')
       const file=task?await o.chat.taskAttachment(task,String(r.params.id)):await o.chat.attachment(o.brand,o.agent,String(r.params.id))
       if(!file){s.status(404).json({error:'Lampiran sudah dihapus atau tidak ditemukan.'});return}
+      if(file.mime.startsWith('video/')){
+        const source=await o.office.videoAttachments.file(o.brand,file.agent_type,String(r.params.id))
+        if(!source)throw new Error('Footage tidak tersedia.')
+        s.type(source.mime).set({'Content-Disposition':`attachment; filename*=UTF-8''${encodeURIComponent(source.name)}`,'X-Content-Type-Options':'nosniff'}).sendFile(source.path)
+        return
+      }
       s.set({'Content-Type':file.mime,'Content-Disposition':`${r.query.inline==='1'&&['application/pdf','image/jpeg'].includes(file.mime)?'inline':'attachment'}; filename="download"; filename*=UTF-8''${encodeURIComponent(file.name)}`,'X-Content-Type-Options':'nosniff','Content-Security-Policy':"sandbox; default-src 'none'"}).send(file.data)
     } catch {s.status(400).json({error:'Lampiran belum dapat dibaca.'})}
   })
@@ -60,7 +75,7 @@ export function installChatRoutes(router:Router,services:Promise<OfficeServices>
   router.get(`${base}/capabilities`,handle(async o=>{
     const connections=await o.office.store.connections(),mode=(await o.office.store.integrationModes()).get(o.brand)?.get('drive')??'mock'
     const drive=connections.some(c=>c.brandId===o.brand && c.service==='drive' && c.status==='active') && mode!=='mock'
-    return {limits:chatLimits(),skills:chatSkills(o.agent).map(({id,name,description})=>({id,name,description,execution:skillExecution(id),source:skillExecution(id)==='tool'?'Tool aplikasi':'Panduan kerja',available:true})),connectors:[{id:'office-files',name:'Berkas brand',available:true,description:'Pilih hasil kerja tersimpan dari brand ini. Akses baca.'},{id:'drive',name:'Google Drive',available:drive,description:drive?'Pilih dokumen dari akun brand yang terhubung. Akses baca.':'Hubungkan akun brand dan aktifkan mode Drive di Pengaturan.'}],plugins:[],note:'Tool aplikasi mengeksekusi pencarian atau perhitungan. Panduan kerja mengarahkan cara agent menjawab. Pilihan dan hasil tercatat pada pesan.'}
+    return {limits:{...chatLimits(),videoUploadBytes:videoUploadLimit()},skills:chatSkills(o.agent).map(({id,name,description})=>({id,name,description,execution:skillExecution(id),source:skillExecution(id)==='tool'?'Tool aplikasi':'Panduan kerja',available:true})),connectors:[{id:'office-files',name:'Berkas brand',available:true,description:'Pilih hasil kerja tersimpan dari brand ini. Akses baca.'},{id:'drive',name:'Google Drive',available:drive,description:drive?'Pilih dokumen dari akun brand yang terhubung. Akses baca.':'Hubungkan akun brand dan aktifkan mode Drive di Pengaturan.'}],plugins:[],note:'Tool aplikasi mengeksekusi pencarian atau perhitungan. Panduan kerja mengarahkan cara agent menjawab. Pilihan dan hasil tercatat pada pesan.'}
   }))
   router.get(`${base}/sources/office-files`,handle(async o=>o.office.store.assetList(o.brand,100)))
   router.post(`${base}/sources/office-files`,handle(async(o,r)=>{

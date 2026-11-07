@@ -1,4 +1,20 @@
-import { planSocialPost } from './social-schedule.js'
+import {checkpointHermes} from './task-checkpoints.js'
+import {renderedCheckpoint} from './render-checkpoint.js'
+import {ProviderLimitError} from './provider-limit.js'
+import { planSocialPost,recordSocialPublication } from './social-schedule.js'
+import { ApprovedLibrary } from './approved-library.js'
+import { DriveLibraryClient } from '../integrations/drive-library.js'
+import { MetaPublisher } from './meta-publisher.js'
+import { VideoAttachments } from './video-attachments.js'
+import { createReadStream } from 'node:fs'
+import { runProductionProcess } from './production-process.js'
+import { chatMaterials } from './production-materials.js'
+import { registerProductionVersion,productionProjects,productionVersion,compareProductionVersions,restoreProductionVersion,backfillProductionVersions } from './production-projects.js'
+import { activeVideoProject,VideoSourceChoiceRequired } from './thumbnail-chat.js'
+import { ProductionEngines,ProductionQaError } from './production-engines.js'
+import { carouselCopySlots,carouselChatPlan } from './chat-production.js'
+import { approvalReview,reviewSummary } from './approval-review.js'
+import { vi } from 'vitest'
 import { cachedDocumentContext } from './document-context-cache.js'
 import { dependencyContext } from './dependency-context.js'
 import { cancelWorkflow } from './orchestration.js'
@@ -75,6 +91,507 @@ describe.skipIf(!available)('office store, runner and event workflow (Postgres)'
   })
   afterAll(async () => { await db?.end(); if (filesDir) await rm(filesDir, { recursive: true, force: true }) })
 
+  it('takes a carousel chat through model copy, queued render and downloadable chat images without auto-approval',async()=>{
+    const chat=new ChatWorkspace(store)
+    const parent=await chat.createChat('otca','content-creator','Buatkan carousel tentang rutinitas belajar.',{})
+    const spec={brand:'otca',slides:[{headline:'Judul satu'},{headline:'Judul dua'},{headline:'Judul tiga'}],caption:'Caption lama'}
+    const production=new ProductionEngines({workDir:filesDir})
+    vi.spyOn(production,'health').mockResolvedValue({configured:true,ready:true,checks:[],runtime:'uji',error:undefined,mode:'render-and-qa'})
+    vi.spyOn(production,'carouselTemplate').mockReturnValue(spec)
+    const png=await sharp({create:{width:20,height:20,channels:3,background:'#ffffff'}}).png().toBuffer()
+    vi.spyOn(production,'run').mockRejectedValueOnce(new ProductionQaError([{slide:1,code:'TEXT_OVERFLOW',message:'Pendekkan judul.'}])).mockResolvedValue({content:'Render siap review',files:[{name:'slide-01.png',mime:'image/png',data:png}],report:{status:'SIAP_DIREVIEW',files:['slide-01.png']}})
+    const hermes=scriptedHermes([{output:JSON.stringify({edits:carouselCopySlots(spec).map(slot=>({path:slot.path,value:'Teks baru'}))})},{output:JSON.stringify({edits:[{path:'slides.0.headline',value:'Baru'}]})}])
+    const runtime={...deps(hermes),production}
+    const outcome=await runTask(runtime,'otca',parent.id)
+    expect(outcome.next).toBe('retry')
+    const childId=outcome.next==='retry'?outcome.children?.[0].id:undefined
+    expect(childId).toBeDefined()
+    expect((await store.task('otca',parent.id))?.status).toBe('running')
+    await runTask(runtime,'otca',childId!)
+    expect(hermes.requests).toHaveLength(2)
+    expect((await store.task('otca',parent.id))?.status).toBe('done')
+    expect((await store.task('otca',childId!))?.status).toBe('waiting_approval')
+    const images=(await store.artifactFiles('otca',[parent.id])).get(parent.id)!
+    expect(images[0]).toMatchObject({name:'slide-01.png',mime:'image/png',size:png.length})
+    expect((await store.assetFile('otca',images[0].id))?.data).toEqual(png)
+    expect((await store.artifactFiles('ciaomanda',[parent.id])).size).toBe(0)
+    expect(await store.approvals('otca',{taskId:parent.id})).toHaveLength(0)
+    expect((await store.approvals('otca',{taskId:childId!}))[0].decision).toBeNull()
+    expect((await db.query('SELECT * FROM cost_events WHERE task_id=$1',[parent.id])).rows).toHaveLength(2)
+    const [pendingReview]=await store.approvals('otca',{taskId:childId!})
+    expect((await approvalReview(store,'otca',pendingReview.id)).files[0].name).toBe('slide-01.png')
+    await expect(approvalReview(store,'ciaomanda',pendingReview.id)).rejects.toThrow(/brand/)
+    const rejected=await store.decide('otca',pendingReview.id,{decision:'rejected',note:'Perbaiki judul slide pertama.',actor:'uji'})
+    expect(rejected.task.status).toBe('cancelled')
+    expect(rejected.revisionTask?.kind).toBe('konten.chat')
+    const revisionPlan=await carouselChatPlan(store,production,rejected.revisionTask!)
+    expect(revisionPlan.sourceTaskId).toBe(childId)
+    expect(revisionPlan.spec).toMatchObject({slides:[{headline:'Baru'},{headline:'Teks baru'},{headline:'Teks baru'}]})
+    expect((await store.artifactFiles('otca',[parent.id])).get(parent.id)?.length).toBe(1)
+    await store.transition('otca',rejected.revisionTask!.id,'cancelled',{actor:'uji'})
+  })
+
+  it('keeps explicit carousel sources scoped and compares immutable versions within one project',async()=>{
+    const create=async(title:string)=>{
+      const task=await store.createTask('otca',{agentType:'content-creator',kind:'konten.produksi',title,brief:'QA versions',createdBy:'uji'})
+      await db.query('INSERT INTO production_jobs(task_id,brand_id,agent_type,payload) VALUES($1,$2,$3,$4)',[task.id,'otca','content-creator',JSON.stringify({title,brief:'QA',spec:{brand:'otca',slides:[{headline:title}]}})])
+      return task
+    }
+    const original=await create('QA project source'),next=await create('QA project revision')
+    const a=await registerProductionVersion(db,'otca','content-creator',original.id,original.title)
+    const b=await registerProductionVersion(db,'otca','content-creator',next.id,next.title,original.id)
+    expect(b).toEqual({project_id:a.project_id,version:2})
+    expect(await registerProductionVersion(db,'otca','content-creator',next.id,next.title,original.id)).toEqual(b)
+    for(const task of [original,next]){
+      await store.transition('otca',task.id,'running',{actor:'uji'})
+      const png=await sharp({create:{width:8,height:8,channels:3,background:task.id===original.id?'#000000':'#ffffff'}}).png().toBuffer()
+      await store.submitProduction('otca',task.id,{content:'QA',files:[{name:'slide-01.png',mime:'image/png',data:png}],report:{status:'SIAP_DIREVIEW'}})
+    }
+    const chat=new ChatWorkspace(store)
+    const chosen=await chat.createChat('otca','content-creator','Revisi carousel: ubah judul',{productionSourceTaskId:original.id})
+    expect((await db.query('SELECT production_source_task_id FROM chat_inputs WHERE task_id=$1',[chosen.id])).rows[0].production_source_task_id).toBe(original.id)
+    await expect(chat.createChat('ciaomanda','content-creator','Revisi carousel',{productionSourceTaskId:original.id})).rejects.toThrow(/brand/)
+    expect((await productionProjects(store,'otca','content-creator','QA project source'))[0].versions).toHaveLength(2)
+    expect((await compareProductionVersions(store,'otca','content-creator',original.id,next.id)).slides[0].changed).toBe(true)
+    await expect(productionVersion(store,'ciaomanda','content-creator',original.id)).rejects.toThrow(/brand/)
+    for(const task of [chosen,original,next])await store.transition('otca',task.id,'cancelled',{actor:'uji'})
+  })
+
+  it('pins video sources, backfills explicit lineage, compares bytes and restores a fresh unapproved version',async()=>{
+    const brand='jepangkoey',agent='video-editor',chat=new ChatWorkspace(store)
+    const create=async(title:string,project:string,source?:string)=>{
+      const task=await store.createTask(brand,{agentType:agent,kind:'video.proyek',title,brief:'QA source selection',createdBy:'uji'})
+      await db.query('INSERT INTO production_jobs(task_id,brand_id,agent_type,payload) VALUES($1,$2,$3,$4)',[task.id,brand,agent,JSON.stringify({nativeProject:project,...(source?{revisionOf:source}:{})})])
+      await store.transition(brand,task.id,'running',{actor:'uji'})
+      await store.submitProduction(brand,task.id,{content:'QA',files:[{name:project+'.mp4',mime:'video/mp4',data:Buffer.from(project)},{name:'thumbnail.png',mime:'image/png',data:await sharp({create:{width:8,height:8,channels:3,background:source?'#ffffff':'#000000'}}).png().toBuffer()},{name:'subtitle.srt',mime:'text/plain',data:Buffer.from(source?'New subtitle':'Old subtitle')}],report:{stage:'video-review'}})
+      return task
+    }
+    const original=await create('QA video original','qa-original'),revision=await create('QA video revised','qa-revised',original.id),unrelated=await create('QA separate video','qa-separate')
+    await backfillProductionVersions(store)
+    await backfillProductionVersions(store)
+    const projects=await productionProjects(store,brand,agent)
+    const project=projects.find(p=>p.versions.some(v=>v.taskId===original.id))!
+    expect(project.versions).toHaveLength(2)
+    expect(project.versions.every(v=>v.ready)).toBe(true)
+    const chosen=await chat.createChat(brand,agent,'Ubah margin thumbnail',{productionSourceTaskId:original.id})
+    expect(await activeVideoProject(store,chosen)).toMatchObject({taskId:original.id,project:'qa-original'})
+    const implicit=await chat.createChat(brand,agent,'Ubah judul video',{})
+    await expect(activeVideoProject(store,implicit)).rejects.toBeInstanceOf(VideoSourceChoiceRequired)
+    const hermes=scriptedHermes([])
+    await runTask(deps(hermes),brand,implicit.id)
+    expect((await store.task(brand,implicit.id))?.status).toBe('done')
+    expect((await store.task(brand,implicit.id))?.result).toContain('Proyek dan versi')
+    expect(hermes.requests).toHaveLength(0)
+    await expect(chat.createChat('otca',agent,'Revisi video',{productionSourceTaskId:original.id})).rejects.toThrow(/brand/)
+    await expect(chat.createChat(brand,'content-creator','Revisi carousel',{productionSourceTaskId:original.id})).rejects.toThrow(/brand/)
+    const compared=await compareProductionVersions(store,brand,agent,original.id,revision.id)
+    expect(compared.files.find(f=>f.kind==='video')).toMatchObject({name:'Video MP4',changed:true})
+    expect(compared.files.find(f=>f.name==='subtitle.srt')).toMatchObject({leftText:'Old subtitle',rightText:'New subtitle',changed:true})
+    expect(compared.summary).toMatchObject({changed:3,added:0,removed:0})
+    await expect(compareProductionVersions(store,brand,agent,original.id,unrelated.id)).rejects.toThrow(/proyek yang sama/)
+    await expect(restoreProductionVersion(store,'otca',agent,original.id)).rejects.toThrow(/brand/)
+    const restored=await restoreProductionVersion(store,brand,agent,original.id)
+    expect(restored).toMatchObject({projectId:project.id,version:3})
+    expect((await store.task(brand,restored.taskId))?.status).toBe('waiting_approval')
+    expect((await store.approvals(brand,{taskId:restored.taskId}))[0].decision).toBeNull()
+    expect((await store.task(brand,original.id))?.status).toBe('waiting_approval')
+    const restoredComparison=await compareProductionVersions(store,brand,agent,original.id,restored.taskId)
+    expect(restoredComparison.summary.changed).toBe(0)
+    const restoredTask=await store.task(brand,restored.taskId)
+    expect((await store.task(brand,restoredTask!.parentId!))?.result).toContain('persetujuan ulang')
+    for(const task of [chosen,original,revision,unrelated])await store.transition(brand,task.id,'cancelled',{actor:'uji'})
+    await store.transition(brand,restored.taskId,'cancelled',{actor:'uji'})
+  })
+
+  it('asks for an explicit carousel project instead of revising an unrelated recent result',async()=>{
+    const brand='jepangkoey',agent='content-creator',chat=new ChatWorkspace(store)
+    const create=async()=>{
+      const task=await store.createTask(brand,{agentType:agent,kind:'konten.produksi',title:'QA ambiguous carousel',brief:'QA',createdBy:'uji'})
+      await db.query('INSERT INTO production_jobs(task_id,brand_id,agent_type,payload) VALUES($1,$2,$3,$4)',[task.id,brand,agent,JSON.stringify({spec:{brand:'info-jerman',slides:[{headline:'QA'}]}})])
+      await registerProductionVersion(db,brand,agent,task.id,task.title)
+      await store.transition(brand,task.id,'running',{actor:'uji'})
+      await store.submitProduction(brand,task.id,{content:'QA',files:[{name:'slide-01.png',mime:'image/png',data:await sharp({create:{width:8,height:8,channels:3,background:'#ffffff'}}).png().toBuffer()}],report:{status:'SIAP_DIREVIEW'}})
+      return task
+    }
+    const a=await create(),b=await create(),request=await chat.createChat(brand,agent,'Revisi judul slide pertama',{})
+    await expect(carouselChatPlan(store,new ProductionEngines({workDir:filesDir}),request)).rejects.toThrow(/beberapa proyek carousel/)
+    for(const t of [a,b,request])await store.transition(brand,t.id,'cancelled',{actor:'uji'})
+  })
+
+  it('keeps chat image permissions scoped and carries attachments through a placement clarification',async()=>{
+    const chat=new ChatWorkspace(store)
+    const png=await sharp({create:{width:8,height:8,channels:3,background:'#c99d38'}}).png().toBuffer()
+    const file=await chat.upload('otca','content-creator','background.png',png)
+    const task=await chat.createChat('otca','content-creator','Buatkan carousel memakai gambar ini',{attachmentIds:[file.id]})
+    const bindings=[{attachmentId:file.id,chatTaskId:task.id,path:'background.src'}]
+    expect((await chatMaterials(store,'otca',bindings))[0].data.length).toBeGreaterThan(0)
+    await expect(chatMaterials(store,'ciaomanda',bindings)).rejects.toThrow()
+    const unrelated=await chat.createChat('otca','content-creator','Halo',{})
+    await expect(chatMaterials(store,'otca',[{...bindings[0],chatTaskId:unrelated.id}])).rejects.toThrow()
+    await store.logEvent(db,unrelated,'carousel_clarification',{brief:task.brief,attachmentIds:[file.id]})
+    const answer=await chat.createChat('otca','content-creator','Gunakan sebagai latar cover',{})
+    expect((await chat.input(answer)).attachmentIds).toEqual([file.id])
+    await chat.removeAttachment('otca','content-creator',file.id)
+    await expect(chatMaterials(store,'otca',bindings)).rejects.toThrow()
+    for(const t of [task,unrelated,answer])await store.transition('otca',t.id,'cancelled',{actor:'uji'})
+  })
+
+  it('reviews actual rendered images for curated chat production and records the separate AI assessment',async()=>{
+    const parent=await store.createTask('otca',{agentType:'content-creator',kind:'konten.chat',title:'QA visual',brief:'Buatkan carousel edukasi',createdBy:'uji'})
+    await store.transition('otca',parent.id,'running',{actor:'uji'})
+    const child=await store.createTask('otca',{agentType:'content-creator',kind:'konten.produksi',title:'QA visual',brief:parent.brief,parentId:parent.id,createdBy:'uji'})
+    const spec={brand:'otca',_officeDesign:{mode:'curated-composition-v1'},slides:[{headline:'QA'},{headline:'QA 2'},{headline:'QA 3'}]}
+    await db.query('INSERT INTO production_jobs(task_id,brand_id,agent_type,payload) VALUES($1,$2,$3,$4)',[child.id,'otca','content-creator',JSON.stringify({title:'QA',brief:parent.brief,spec})])
+    const png=await sharp({create:{width:8,height:8,channels:3,background:'#fff'}}).png().toBuffer()
+    const production=new ProductionEngines({workDir:filesDir})
+    vi.spyOn(production,'run').mockRejectedValueOnce(new ProductionQaError([{slide:1,code:'SPEC_SCHEMA',message:'Perbaiki format sumber'}])).mockRejectedValueOnce(new ProductionQaError([{slide:1,code:'TEXT_OVERFLOW',message:'Pendekkan judul'}])).mockResolvedValue({content:'QA render',files:[1,2,3].map(n=>({name:`slide-0${n}.png`,mime:'image/png',data:png})),report:{status:'SIAP_DIREVIEW'}})
+    vi.spyOn(production,'compositionContract').mockReturnValue('Kontrak schema engine')
+    vi.spyOn(production,'visualReferences').mockResolvedValue({path:'reference.jpg',sha256:'ref-hash',image:'data:image/png;base64,'+png.toString('base64')})
+    const hermes=scriptedHermes([{output:JSON.stringify({spec})},{output:JSON.stringify({spec})},{output:'{"summary":"Panel kosong","issues":[{"slide":2,"severity":"blocking","message":"Kurangi rongga panel"}]}'},{output:JSON.stringify({spec:{...spec,slides:[{headline:'QA diperbaiki'},{headline:'QA 2'},{headline:'QA 3'}]}})},{output:'{"summary":"Hierarki sesuai referensi","issues":[]}'}])
+    await runTask({...deps(hermes),production},'otca',child.id)
+    expect(hermes.requests[2].images).toHaveLength(4)
+    expect(production.run).toHaveBeenCalledTimes(4)
+    expect(hermes.requests[1].images).toBeUndefined()
+    expect(hermes.requests[4].images).toHaveLength(4)
+    expect(hermes.requests[0].reasoningEffort).toBe('high')
+    expect((await db.query('SELECT report FROM production_jobs WHERE task_id=$1',[child.id])).rows[0].report.visualReview).toMatchObject({assessment:'ai-visual-review',passed:true,rounds:2})
+    const approval=(await store.approvals('otca',{taskId:child.id}))[0]
+    expect((await approvalReview(store,'otca',approval.id)).visual?.summary).toContain('Hierarki')
+    expect(approval.decision).toBeNull()
+  })
+
+  it('queues local production without Hermes, imports brand-scoped files and requires human approval',async()=>{
+    const task=await store.createTask('ciaomanda',{agentType:'content-creator',kind:'konten.produksi',title:'QA local renderer',brief:'uji',createdBy:'uji'})
+    await db.query('INSERT INTO production_jobs(task_id,brand_id,agent_type,payload) VALUES($1,$2,$3,$4)',[task.id,'ciaomanda','content-creator',JSON.stringify({title:'QA',brief:'uji'})])
+    const production=new ProductionEngines({workDir:filesDir})
+    const png=await sharp({create:{width:20,height:20,channels:3,background:'#ffffff'}}).png().toBuffer()
+    vi.spyOn(production,'run').mockResolvedValue({content:'Render siap review',files:[{name:'slide-01.png',mime:'image/png',data:png}],report:{status:'SIAP_DIREVIEW',files:['slide-01.png']}})
+    const hermes=scriptedHermes([])
+    await runTask({...deps(hermes),production},'ciaomanda',task.id)
+    expect(hermes.requests).toHaveLength(0)
+    expect((await store.task('ciaomanda',task.id))?.status).toBe('waiting_approval')
+    const asset=(await store.assetList('ciaomanda')).find(a=>a.taskId===task.id&&a.name==='slide-01.png')!
+    expect(asset.downloadable).toBe(true)
+    expect((await store.assetFile('ciaomanda',asset.id))?.data).toEqual(png)
+    expect(await store.assetFile('otca',asset.id)).toBeUndefined()
+    expect((await db.query('SELECT * FROM cost_events WHERE task_id=$1',[task.id])).rows).toHaveLength(0)
+    expect((await store.approvals('ciaomanda',{taskId:task.id}))[0].decision).toBeNull()
+    const approval=(await store.approvals('ciaomanda',{taskId:task.id}))[0]
+    const approved=await store.decide('ciaomanda',approval.id,{decision:'approved',actor:'reviewer-test'})
+    expect(approved.handoffTask).toMatchObject({brandId:'ciaomanda',agentType:'social-media-manager',kind:'publikasi.caption',status:'queued'})
+    const pack=(await db.query('SELECT * FROM approved_packages WHERE brand_id=$1 AND source_task_id=$2',['ciaomanda',task.id])).rows[0]
+    expect(pack.assets.map((item:{id:string})=>item.id)).toContain(asset.id)
+    expect(pack.smm_task_id).toBe(approved.handoffTask!.id)
+    expect(pack.drive_status).toBe('pending')
+    await expect(store.decide('ciaomanda',approval.id,{decision:'approved',actor:'reviewer-test'})).rejects.toThrow('sudah diputuskan')
+    expect((await db.query('SELECT id FROM approved_packages WHERE source_task_id=$1',[task.id])).rows).toHaveLength(1)
+    const resumed=await Promise.all([store.prepareApprovedPublication('ciaomanda',task.id,'uji'),store.prepareApprovedPublication('ciaomanda',task.id,'uji')])
+    expect(resumed.map(item=>item.id)).toEqual([approved.handoffTask!.id,approved.handoffTask!.id])
+    const smm=approved.handoffTask!
+    await runTask(deps(scriptedHermes([{output:'Caption approved untuk publikasi.'}])),'ciaomanda',smm.id)
+    const smmApproval=(await store.approvals('ciaomanda',{taskId:smm.id}))[0]
+    expect(smmApproval.approvalType).toBe('publikasi')
+    await expect(planSocialPost(store,'ciaomanda',smm.id,{platform:'instagram',scheduledAt:new Date(Date.now()+86400000).toISOString()},'uji')).rejects.toThrow()
+    await store.decide('ciaomanda',smmApproval.id,{decision:'approved',actor:'reviewer-test'})
+    const schedule=await planSocialPost(store,'ciaomanda',smm.id,{platform:'instagram',scheduledAt:new Date(Date.now()+86400000).toISOString()},'uji')
+    const receipt={postUrl:'https://www.instagram.com/p/test-approved/',publishedAt:new Date(Date.now()-60000).toISOString()}
+    await expect(recordSocialPublication(store,'otca',schedule.id,receipt,'uji')).rejects.toThrow()
+    const recorded=await recordSocialPublication(store,'ciaomanda',schedule.id,receipt,'uji')
+    expect(recorded.sourceTaskId).toBe(task.id)
+    const repeated=await recordSocialPublication(store,'ciaomanda',schedule.id,receipt,'uji')
+    expect(repeated.publication.id).toBe(recorded.publication.id)
+    expect((await db.query('SELECT status FROM social_schedule WHERE id=$1',[schedule.id])).rows[0].status).toBe('published')
+    const connections=new Connections({store})
+    const token=vi.spyOn(connections,'accessToken').mockResolvedValue('test-only')
+    const folder=vi.spyOn(DriveLibraryClient.prototype,'folder').mockResolvedValue()
+    const child=vi.spyOn(DriveLibraryClient.prototype,'childFolder').mockImplementation(async(parent,name)=>`${parent}-${name}`)
+    let sequence=0
+    const generate=vi.spyOn(DriveLibraryClient.prototype,'generateId').mockImplementation(async()=>`drive-file-${++sequence}`)
+    const upload=vi.spyOn(DriveLibraryClient.prototype,'upload').mockRejectedValueOnce(new Error('upload interrupted')).mockResolvedValue()
+    const move=vi.spyOn(DriveLibraryClient.prototype,'move').mockResolvedValue()
+    try{
+      const library=new ApprovedLibrary(store,connections)
+      await store.setIntegrationMode('ciaomanda','drive','live','uji')
+      await library.configure('ciaomanda','brand-folder-test')
+      await expect(library.sync('otca',task.id)).rejects.toThrow('tidak ditemukan')
+      await expect(library.sync('ciaomanda',task.id)).rejects.toThrow('interrupted')
+      const interrupted=(await db.query('SELECT drive_status,drive_files FROM approved_packages WHERE source_task_id=$1',[task.id])).rows[0]
+      expect(interrupted.drive_status).toBe('failed')
+      const firstId=Object.values(interrupted.drive_files)[0]
+      await library.sync('ciaomanda',task.id)
+      expect(upload.mock.calls[1][0]).toBe(firstId)
+      expect(upload.mock.calls.some(call=>call[2]==='caption-publication.txt')).toBe(true)
+      expect(move).toHaveBeenCalledTimes(1)
+      const complete=(await db.query('SELECT drive_status,drive_location FROM approved_packages WHERE source_task_id=$1',[task.id])).rows[0]
+      expect(complete).toMatchObject({drive_status:'synced',drive_location:'published'})
+      const count=upload.mock.calls.length
+      await library.sync('ciaomanda',task.id)
+      expect(upload).toHaveBeenCalledTimes(count)
+    }finally{
+      token.mockRestore();folder.mockRestore();child.mockRestore();generate.mockRestore();upload.mockRestore();move.mockRestore()
+    }
+  })
+
+  it('publishes an approved schedule once, serves only signed slides, and reconciles an uncertain delivery without reposting',async()=>{
+    const brand='ciaomanda'
+    const source=await store.createTask(brand,{agentType:'content-creator',kind:'konten.produksi',title:'QA Meta delivery',brief:'QA publication',createdBy:'uji'})
+    await store.transition(brand,source.id,'running',{actor:'uji'})
+    const png=await sharp({create:{width:320,height:400,channels:3,background:'#eee'}}).png().toBuffer()
+    const submitted=await store.submitProduction(brand,source.id,{content:'Konten untuk review',files:[{name:'slide-02.png',mime:'image/png',data:png},{name:'slide-01.png',mime:'image/png',data:png}],report:{status:'SIAP_DIREVIEW'}})
+    const approved=await store.decide(brand,submitted.approval.id,{decision:'approved',actor:'uji'})
+    const smm=approved.handoffTask!
+    await runTask(deps(scriptedHermes([{output:'Caption publikasi teruji.'}])),brand,smm.id)
+    await store.decide(brand,(await store.approvals(brand,{taskId:smm.id}))[0].id,{decision:'approved',actor:'uji'})
+    const plan=await planSocialPost(store,brand,smm.id,{platform:'instagram',scheduledAt:new Date(Date.now()+60000).toISOString()},'uji')
+    await store.setIntegrationMode(brand,'meta-graph','live','uji')
+    const env={META_GRAPH_VERSION:'v25.0',META_CIAOMANDA_PAGE_ID:'123',META_CIAOMANDA_INSTAGRAM_ID:'456',META_CIAOMANDA_PAGE_ACCESS_TOKEN:'test-secret',OFFICE_MEDIA_PUBLIC_URL:'https://office.example',INTEGRATIONS_ENCRYPTION_KEY:Buffer.alloc(32,1).toString('base64')}
+    let images=0,publishes=0,verifiedImages=0
+    let publisher:MetaPublisher
+    const fetcher=vi.fn<typeof fetch>(async(input,init)=>{
+      const url=new URL(String(input)),body=new URLSearchParams(String(init?.body??''))
+      const reply=(value:unknown)=>new Response(JSON.stringify(value))
+      if(url.pathname.endsWith('/123'))return reply({id:'123',name:'Brand test',instagram_business_account:{id:'456'}})
+      if(url.pathname.endsWith('/456/media')){
+        if(body.get('media_type')==='CAROUSEL')return reply({id:'200'})
+        const mediaUrl=new URL(body.get('image_url')!)
+        const asset=mediaUrl.pathname.split('/').at(-1)!.replace('.jpg','')
+        const expires=mediaUrl.searchParams.get('expires')!,signature=mediaUrl.searchParams.get('signature')!
+        const jpeg=await publisher.media(brand,plan.id,asset,expires,signature)
+        expect((await sharp(jpeg).metadata()).format).toBe('jpeg')
+        await expect(publisher.media(brand,plan.id,asset,expires,'0'.repeat(64))).rejects.toThrow()
+        verifiedImages++
+        return reply({id:String(100+ ++images)})
+      }
+      if(url.pathname.endsWith('/200'))return reply({status_code:'FINISHED'})
+      if(url.pathname.endsWith('/456/media_publish')){
+        publishes++
+        await expect(recordSocialPublication(store,brand,plan.id,{postUrl:'https://instagram.com/p/manual-race/',publishedAt:new Date().toISOString()},'uji')).rejects.toThrow('sedang diproses')
+        return reply({id:'300'})
+      }
+      if(url.pathname.endsWith('/300'))return reply({permalink:'https://www.instagram.com/p/meta-test/'})
+      if(url.pathname.endsWith('/123/photos')){
+        images++
+        if(images===4)await store.setPaused(brand,'social-media-manager',true,'uji')
+        return reply({id:String(400+images)})
+      }
+      if(url.pathname.endsWith('/123/feed')){publishes++;throw new Error('network disconnected after publish')}
+      throw new Error(`Unexpected Graph path ${url.pathname}`)
+    })
+    publisher=new MetaPublisher(store,undefined,fetcher,env)
+    await expect(publisher.arm('otca',plan.id,'Caption publikasi teruji.','uji')).rejects.toThrow('tidak ditemukan')
+    await expect(publisher.arm(brand,plan.id,'Unapproved replacement','uji')).rejects.toThrow('disetujui')
+    await publisher.arm(brand,plan.id,'Caption publikasi teruji.','uji')
+    await db.query("UPDATE social_schedule SET scheduled_at=now()-interval '1 second' WHERE id=$1",[plan.id])
+    await Promise.all([publisher.run(brand,plan.id),publisher.run(brand,plan.id)])
+    expect(publishes).toBe(1)
+    expect(verifiedImages).toBe(2)
+    expect((await db.query('SELECT status FROM social_schedule WHERE id=$1',[plan.id])).rows[0].status).toBe('published')
+    expect((await db.query('SELECT provider_id,state FROM social_deliveries WHERE schedule_id=$1',[plan.id])).rows[0]).toMatchObject({provider_id:'300',state:'published'})
+    await publisher.run(brand,plan.id)
+    expect(publishes).toBe(1)
+    const facebook=await planSocialPost(store,brand,smm.id,{platform:'facebook',scheduledAt:new Date(Date.now()+60000).toISOString()},'uji')
+    await publisher.arm(brand,facebook.id,'Caption publikasi teruji.','uji')
+    await db.query("UPDATE social_schedule SET scheduled_at=now()-interval '1 second' WHERE id=$1",[facebook.id])
+    await publisher.cancel(brand,facebook.id,'uji')
+    await publisher.run(brand,facebook.id)
+    expect(publishes).toBe(1)
+    await publisher.arm(brand,facebook.id,'Caption publikasi teruji.','uji')
+    await expect(publisher.run(brand,facebook.id)).rejects.toThrow('dijeda')
+    expect(publishes).toBe(1)
+    await store.setPaused(brand,'social-media-manager',false,'uji')
+    await publisher.arm(brand,facebook.id,'Caption publikasi teruji.','uji')
+    await publisher.run(brand,facebook.id)
+    expect((await db.query('SELECT state FROM social_deliveries WHERE schedule_id=$1',[facebook.id])).rows[0].state).toBe('uncertain')
+    expect(publishes).toBe(2)
+    await publisher.run(brand,facebook.id)
+    expect(publishes).toBe(2)
+    await recordSocialPublication(store,brand,facebook.id,{postUrl:'https://www.facebook.com/123/posts/42',publishedAt:new Date().toISOString()},'uji')
+    expect((await db.query('SELECT state FROM social_deliveries WHERE schedule_id=$1',[facebook.id])).rows[0].state).toBe('published')
+  })
+
+  it('renders a Manager-delegated carousel with inherited images, revises it, and releases the next specialist only after approval',async()=>{
+    const chat=new ChatWorkspace(store)
+    const png=await sharp({create:{width:320,height:400,channels:3,background:'#eee'}}).png().toBuffer()
+    const image=await chat.upload('otca','manager','background.png',png)
+    const brief='Buatkan carousel 3 slide dan kalender konten. Gunakan lampiran sebagai latar.'
+    const manager=await chat.createChat('otca','manager',brief,{attachmentIds:[image.id]},{agentType:'manager',kind:'konten.orchestrasi',title:'Produksi tim',brief,createdBy:'uji'})
+    const spec={brand:'otca',background:{src:'assets/brands/otca/background.png'},slides:[{headline:'Judul satu'},{headline:'Judul dua'},{headline:'Judul tiga'}],caption:'Caption awal'}
+    const production=new ProductionEngines({workDir:filesDir})
+    vi.spyOn(production,'health').mockResolvedValue({configured:true,ready:true,checks:[],runtime:'uji',error:undefined,mode:'render-and-qa'})
+    vi.spyOn(production,'carouselTemplate').mockReturnValue(spec)
+    const render=vi.spyOn(production,'run').mockRejectedValueOnce(new ProductionQaError([{slide:1,code:'TEXT_OVERFLOW',message:'Ringkas judul.'}])).mockResolvedValue({content:'Carousel hasil produksi tim',files:[{name:'slide-01.png',mime:'image/png',data:png},{name:'slide-02.png',mime:'image/png',data:png},{name:'slide-03.png',mime:'image/png',data:png},{name:'caption.md',mime:'text/markdown',data:Buffer.from('Caption produksi tim.')}],report:{status:'SIAP_DIREVIEW'}})
+    const copy={edits:carouselCopySlots(spec).map(slot=>({path:slot.path,value:'Teks baru'})),images:[{attachmentId:image.id,path:'background.src'}]}
+    const hermes=scriptedHermes([
+      {output:JSON.stringify({summary:'Render carousel lalu susun kalender',tasks:[{agentType:'content-creator',kind:'konten.carousel-produksi',title:'Render carousel',brief},{agentType:'social-media-manager',kind:'publikasi.kalender',title:'Kalender',brief:'Susun kalender berdasarkan hasil approved',dependsOn:['content-creator']}]})},
+      {output:JSON.stringify(copy)},
+      {output:JSON.stringify({edits:[{path:'slides.0.headline',value:'Ringkas'}]})},
+      {output:JSON.stringify({...copy,edits:carouselCopySlots(spec).map(slot=>({path:slot.path,value:'Teks revisi'}))})},
+      {output:'Kalender berdasarkan carousel approved.'},
+      {output:'Hasil produksi tim selesai untuk ditinjau.'},
+    ])
+    const runtime={...deps(hermes),chat,production}
+    await runTask(runtime,'otca',manager.id)
+    const children=(await store.tasks('otca')).filter(task=>task.parentId===manager.id)
+    const creator=children.find(task=>task.agentType==='content-creator')!,smm=children.find(task=>task.agentType==='social-media-manager')!
+    await runTask(runtime,'otca',smm.id)
+    expect(hermes.requests).toHaveLength(1)
+    await runTask(runtime,'otca',creator.id)
+    expect((await store.task('otca',creator.id))?.error).toBeNull()
+    expect((await store.task('otca',creator.id))?.status).toBe('queued')
+    const payload=(await db.query('SELECT payload FROM production_jobs WHERE task_id=$1',[creator.id])).rows[0].payload
+    expect(payload.chatAssets[0]).toMatchObject({attachmentId:image.id,chatTaskId:creator.id})
+    await expect(chatMaterials(store,'infojerman',payload.chatAssets)).rejects.toThrow()
+    await runTask(runtime,'otca',creator.id)
+    expect(render).toHaveBeenCalledTimes(2)
+    expect(render.mock.calls[0][6]?.[0]?.id).toBe(image.id)
+    expect((await store.task('otca',creator.id))?.status).toBe('waiting_approval')
+    expect((await store.task('otca',manager.id))?.result).toBeNull()
+    await runTask(runtime,'otca',smm.id)
+    expect(hermes.requests).toHaveLength(3)
+    const review=(await store.approvals('otca',{taskId:creator.id}))[0]
+    await store.decide('otca',review.id,{decision:'rejected',note:'Ringkas penutup.',actor:'uji'})
+    await runTask(runtime,'otca',creator.id)
+    await runTask(runtime,'otca',creator.id)
+    expect(hermes.requests[3].input).toContain('Ringkas penutup.')
+    await runTask(runtime,'otca',smm.id)
+    expect(hermes.requests).toHaveLength(4)
+    const revised=(await store.approvals('otca',{taskId:creator.id,open:true}))[0]
+    await store.decide('otca',revised.id,{decision:'approved',actor:'uji'})
+    await runTask(runtime,'otca',smm.id)
+    expect(hermes.requests[4].input).toContain('Caption produksi tim.')
+    expect(hermes.requests[4].input).toContain('slide-01.png')
+    await store.decide('otca',(await store.approvals('otca',{taskId:smm.id}))[0].id,{decision:'approved',actor:'uji'})
+    await runTask(runtime,'otca',manager.id)
+    expect((await store.task('otca',manager.id))?.status).toBe('waiting_approval')
+    await store.decide('otca',(await store.approvals('otca',{taskId:manager.id}))[0].id,{decision:'approved',actor:'uji'})
+    expect((await db.query('SELECT task_id FROM production_jobs WHERE task_id=$1',[creator.id])).rows).toHaveLength(1)
+  })
+
+  it('records video draft feedback in a separate preparation job without enabling a full render',async()=>{
+    const task=await store.createTask('otca',{agentType:'video-editor',kind:'video.proyek',title:'QA video review',brief:'Brief uji',createdBy:'uji'})
+    const payload={title:task.title,brief:task.brief,video:{preset:'glass-tech-bukti-sosial',seed:1}}
+    await db.query('INSERT INTO production_jobs(task_id,brand_id,agent_type,payload) VALUES($1,$2,$3,$4)',[task.id,'otca','video-editor',JSON.stringify(payload)])
+    await store.transition('otca',task.id,'running',{actor:'uji'})
+    const result=await store.submitProduction('otca',task.id,{content:'Draf proyek',files:[],report:{status:'DRAFT_PROJECT'}})
+    const rejected=await store.decide('otca',result.approval.id,{decision:'rejected',note:'Perjelas pembuka pada brief.',actor:'uji'})
+    expect(rejected.task.status).toBe('cancelled')
+    expect(rejected.revisionTask?.kind).toBe('video.proyek')
+    const next=(await db.query('SELECT payload FROM production_jobs WHERE task_id=$1',[rejected.revisionTask!.id])).rows[0].payload
+    expect(next.brief).toContain('Perjelas pembuka')
+    expect(next.video).toEqual(payload.video)
+    await store.transition('otca',rejected.revisionTask!.id,'cancelled',{actor:'uji'})
+  })
+
+  it('accepts streamed footage, creates a video plan from chat, and keeps source access scoped',async()=>{
+    const directory=await mkdtemp(join(process.cwd(),'tmp','qa-video-'))
+    try{
+      const clipPath=join(directory,'clip.mp4')
+      await runProductionProcess('ffmpeg',['-y','-v','error','-f','lavfi','-i','color=c=black:s=320x400:d=1','-c:v','libx264','-pix_fmt','yuv420p',clipPath],directory)
+      const videos=new VideoAttachments(store,join(directory,'uploads'))
+      const file=await videos.upload('otca','video-editor','clip.mp4',createReadStream(clipPath))
+      expect(file.mime).toBe('video/mp4')
+      expect(await videos.file('infojerman','video-editor',file.id)).toBeUndefined()
+      await expect(videos.upload('otca','content-creator','clip.mp4',createReadStream(clipPath))).rejects.toThrow('Manager')
+      const chat=new ChatWorkspace(store)
+      const parent=await chat.createChat('otca','video-editor','Siapkan rencana produksi video dari footage ini.',{attachmentIds:[file.id]})
+      const scene={title:'Pembuka',duration:5,narration:'Tentukan tujuan belajar bersama anak.',onScreen:'Mulai dari tujuan',layout:'split',visual:'Talent di bagian bawah, ilustrasi tujuan di atas.',motion:'Jalur bergerak mengikuti kata kunci.',audio:'Audio asli footage.'}
+      const plan={objective:'Reels edukasi',audience:'Orang tua',subtitleStyle:'split',scenes:[scene,{...scene,title:'Penutup'}],materials:['Footage pengguna'],risks:['Transkrip belum dikoreksi.']}
+      const production=new ProductionEngines({workDir:directory})
+      vi.spyOn(production,'health').mockResolvedValue({configured:true,ready:true,checks:[],runtime:'uji',error:undefined,mode:'project-preparation'})
+      vi.spyOn(production,'context').mockReturnValue({text:'',files:[],version:'a'.repeat(20)})
+      vi.spyOn(production,'presets').mockResolvedValue([{id:'glass-tech-bukti-sosial',label:'Glass Tech'}])
+      const render=vi.spyOn(production,'run').mockResolvedValue({content:'Naskah dan rencana adegan siap review.',files:[{name:'production-plan.json',mime:'application/json',data:Buffer.from(JSON.stringify(plan))},{name:'naskah.md',mime:'text/markdown',data:Buffer.from('# Naskah teruji')}],report:{status:'NARRATIVE_PLAN'}})
+      const hermes=scriptedHermes([{output:JSON.stringify({preset:'glass-tech-bukti-sosial',plan})}])
+      const runtime={...deps(hermes),chat,production,videoAttachments:videos}
+      const outcome=await runTask(runtime,'otca',parent.id)
+      const childId=outcome.next==='retry'?outcome.children?.[0].id:undefined
+      expect(childId,(await store.task('otca',parent.id))?.error??'no task error').toBeDefined()
+      expect(hermes.requests[0].input).toContain('Isi ucapan belum ditranskrip')
+      await runTask(runtime,'otca',childId!)
+      expect(render.mock.calls[0][7]?.[0]?.id).toBe(file.id)
+      expect((await store.task('otca',parent.id))?.result).toContain('Naskah dan rencana adegan')
+      expect((await store.task('otca',parent.id))?.result).not.toContain('0 slide')
+      expect((await store.artifactFiles('otca',[parent.id])).get(parent.id)?.some(item=>item.name==='naskah.md')).toBe(true)
+      const review=(await store.approvals('otca',{taskId:childId!}))[0]
+      expect((await approvalReview(store,'otca',review.id)).videoPlan?.scenes).toHaveLength(2)
+      const revision=await store.decide('otca',review.id,{decision:'rejected',note:'Perjelas tujuan video.',actor:'uji'})
+      expect(revision.revisionTask?.kind).toBe('konten.chat')
+      const revisionHermes=scriptedHermes([{output:JSON.stringify({preset:'glass-tech-bukti-sosial',plan:{...plan,objective:'Tujuan video direvisi'}})}])
+      const revisionRuntime={...runtime,hermes:revisionHermes}
+      const revisionOutcome=await runTask(revisionRuntime,'otca',revision.revisionTask!.id)
+      const revisionId=revisionOutcome.next==='retry'?revisionOutcome.children?.[0].id:undefined
+      expect(revisionId).toBeDefined()
+      expect(revisionHermes.requests[0].input).toContain('Rencana sebelumnya')
+      const revisionPayload=(await db.query('SELECT payload FROM production_jobs WHERE task_id=$1',[revisionId])).rows[0].payload
+      expect(revisionPayload.video.sources[0].attachmentId).toBe(file.id)
+      expect(revisionPayload.video.plan.objective).toBe('Tujuan video direvisi')
+      await runTask(revisionRuntime,'otca',revisionId!)
+      await store.decide('otca',(await store.approvals('otca',{taskId:revisionId!,open:true}))[0].id,{decision:'approved',actor:'uji'})
+      const payload=(await db.query('SELECT payload FROM production_jobs WHERE task_id=$1',[childId])).rows[0].payload
+      expect(payload.video).not.toHaveProperty('persetujuan')
+      const managerFile=await videos.upload('otca','manager','team-clip.mp4',createReadStream(clipPath))
+      const manager=await chat.createChat('otca','manager','Susun rencana produksi Reels dari footage.',{attachmentIds:[managerFile.id]},{agentType:'manager',kind:'konten.orchestrasi',title:'Tim video',brief:'Susun rencana produksi Reels dari footage.',createdBy:'uji'})
+      const teamHermes=scriptedHermes([
+        {output:JSON.stringify({summary:'Video Editor menyusun naskah dan rencana adegan',tasks:[{agentType:'video-editor',kind:'video.rencana-produksi',title:'Rencana Reels',brief:'Susun rencana produksi video dari footage.'}]})},
+        {output:JSON.stringify({preset:'glass-tech-bukti-sosial',plan})},
+        {output:JSON.stringify({preset:'glass-tech-bukti-sosial',plan:{...plan,objective:'Revisi tujuan Reels'}})},
+        {output:'Rencana video siap ditinjau.'},
+      ])
+      const team={...runtime,hermes:teamHermes}
+      await runTask(team,'otca',manager.id)
+      const editor=(await store.tasks('otca')).find(task=>task.parentId===manager.id)!
+      await runTask(team,'otca',editor.id)
+      await runTask(team,'otca',editor.id)
+      expect(render.mock.calls.at(-1)?.[7]?.[0]?.id).toBe(managerFile.id)
+      expect((await store.task('otca',manager.id))?.result).toBeNull()
+      const teamReview=(await store.approvals('otca',{taskId:editor.id}))[0]
+      await store.decide('otca',teamReview.id,{decision:'rejected',note:'Perjelas tujuan Reels.',actor:'uji'})
+      await runTask(team,'otca',editor.id)
+      expect(teamHermes.requests[2].input).toContain('Rencana sebelumnya')
+      await runTask(team,'otca',editor.id)
+      await store.decide('otca',(await store.approvals('otca',{taskId:editor.id,open:true}))[0].id,{decision:'approved',actor:'uji'})
+      await runTask(team,'otca',manager.id)
+      expect(teamHermes.requests[3].input).toContain('Naskah teruji')
+      await store.decide('otca',(await store.approvals('otca',{taskId:manager.id,open:true}))[0].id,{decision:'approved',actor:'uji'})
+      await chat.removeAttachment('otca','manager',managerFile.id)
+      await videos.cleanupRemoved('otca','manager',managerFile.id)
+      await chat.removeAttachment('otca','video-editor',file.id)
+      await videos.cleanupRemoved('otca','video-editor',file.id)
+      await expect(videos.material('otca',parent.id,file.id)).rejects.toThrow('dihapus')
+    }finally{await rm(directory,{recursive:true,force:true})}
+  })
+
+  it('closes a pending source only after its replacement render succeeds, without approving either result',async()=>{
+    const create=async(title:string)=>{
+      const task=await store.createTask('ciaomanda',{agentType:'content-creator',kind:'konten.produksi',title,brief:'QA versi',createdBy:'uji'})
+      await db.query('INSERT INTO production_jobs(task_id,brand_id,agent_type,payload) VALUES($1,$2,$3,$4)',[task.id,'ciaomanda',task.agentType,JSON.stringify({title,brief:'QA',spec:{brand:'ciao-manda',slides:[{headline:title}]}})])
+      await store.transition('ciaomanda',task.id,'running',{actor:'uji'})
+      return task
+    }
+    const source=await create('Versi pertama')
+    const original=await store.submitProduction('ciaomanda',source.id,{content:'Pertama',files:[],report:{status:'SIAP_DIREVIEW'}})
+    const replacement=await create('Revisi')
+    await store.logEvent(db,replacement,'carousel_source',{sourceTaskId:source.id})
+    expect((await store.task('ciaomanda',source.id))?.status).toBe('waiting_approval')
+    await store.submitProduction('ciaomanda',replacement.id,{content:'Revisi',files:[],report:{status:'SIAP_DIREVIEW'}})
+    expect((await store.task('ciaomanda',source.id))?.status).toBe('cancelled')
+    expect((await reviewSummary(store,'ciaomanda',source.id))?.status).toBe('superseded')
+    expect((await store.approvals('ciaomanda',{open:true})).some(a=>a.id===original.approval.id)).toBe(false)
+    expect((await store.approvals('ciaomanda',{taskId:replacement.id}))[0].decision).toBeNull()
+    await store.transition('ciaomanda',replacement.id,'cancelled',{actor:'uji'})
+  })
+
+  it('does not publish local files if cancellation happens during production',async()=>{
+    const task=await store.createTask('otca',{agentType:'video-editor',kind:'video.proyek',title:'QA cancellation',brief:'uji',createdBy:'uji'})
+    await db.query('INSERT INTO production_jobs(task_id,brand_id,agent_type,payload) VALUES($1,$2,$3,$4)',[task.id,'otca','video-editor','{}'])
+    const production=new ProductionEngines({workDir:filesDir})
+    vi.spyOn(production,'run').mockImplementation(async()=>{await store.transition('otca',task.id,'cancelled',{actor:'uji'});return {content:'Tidak boleh dipublikasikan',files:[],report:{}}})
+    await runTask({...deps(scriptedHermes([])),production},'otca',task.id)
+    expect((await store.task('otca',task.id))?.status).toBe('cancelled')
+    expect(await store.assets('otca',task.id)).toHaveLength(0)
+    expect(await store.approvals('otca',{taskId:task.id})).toHaveLength(0)
+  })
+
   it('loads the four brands and their crews from context/', async () => {
     expect((await store.brands()).map((brand) => brand.id)).toEqual(['ciaomanda', 'infojerman', 'jepangkoey', 'otca'])
     expect((await store.agents('otca')).map((agent) => agent.agentType)).toContain('event-specialist')
@@ -83,6 +600,7 @@ describe.skipIf(!available)('office store, runner and event workflow (Postgres)'
   })
 
   it('takes a stage through approval, rejection with notes, revision and approval', async () => {
+    const baseline=await store.summary('otca')
     const event = await events.create('otca', { title: 'Parents Talk Kuliah di Jerman', details: { tanggal: '14 Desember 2026' }, createdBy: 'uji' })
     const task = await events.startStage('otca', event.id, 'tema', 'uji')
     expect(task).toMatchObject({ status: 'queued', agentType: 'event-specialist', kind: 'event.tema', complex: true })
@@ -95,7 +613,7 @@ describe.skipIf(!available)('office store, runner and event workflow (Postgres)'
     expect(hermes.requests[0]).toMatchObject({ reasoningEffort: 'high', sessionId: `task-${task.id}` })
     expect(hermes.requests[0].provider).toBeUndefined() // Codex, the container default
     const [approval] = await store.approvals('otca', { open: true })
-    expect(await store.summary('otca')).toEqual({ queued: 0, approvals: 1, waitingQuota: 0 })
+    expect(await store.summary('otca')).toEqual({...baseline,approvals:baseline.approvals+1})
     expect(await store.summary('infojerman')).toEqual({ queued: 0, approvals: 0, waitingQuota: 0 })
     expect(approval).toMatchObject({ taskId: task.id, approvalType: 'event' })
     expect((await store.agents('otca')).find((agent) => agent.agentType === 'event-specialist')?.status).toBe('waiting_approval')
@@ -109,6 +627,8 @@ describe.skipIf(!available)('office store, runner and event workflow (Postgres)'
     expect((await store.assets('otca', task.id)).map((asset) => asset.version)).toEqual([2, 1])
 
     const [second] = await store.approvals('otca', { open: true })
+    expect((await approvalReview(store,'otca',approval.id)).content).toBe('# Tema v1')
+    expect((await approvalReview(store,'otca',second.id)).content).toBe('# Tema v2')
     const decided = await store.decide('otca', second.id, { decision: 'approved', actor: 'uji' })
     expect(decided.task.status).toBe('approved')
     const detail = await events.detail('otca', event.id)
@@ -190,6 +710,26 @@ describe.skipIf(!available)('office store, runner and event workflow (Postgres)'
     expect((await chat.evidence('ciaomanda','social-media-manager')).some(e=>e.taskId===task.id)).toBe(false)
   })
 
+  it('saves explicit chat memory atomically for its own agent without calling Hermes',async()=>{
+    const chat=new ChatWorkspace(store)
+    const body='QA-MEMORY-CHAT gunakan sapaan Anda'
+    const task=await chat.createChat('ciaomanda','content-creator','Simpan sebagai memori: '+body,{})
+    expect(task.status).toBe('done')
+    expect(task.result).toContain('Memori disimpan')
+    const saved=(await store.agentNotes('ciaomanda')).find(n=>n.body===body)!
+    expect(saved).toMatchObject({agentType:'content-creator',kind:'memory',active:true})
+    expect((await store.notesFor('ciaomanda','manager')).some(n=>n.id===saved.id)).toBe(false)
+    expect((await store.agentNotes('otca')).some(n=>n.id===saved.id)).toBe(false)
+    const hermes=scriptedHermes([])
+    await runTask({...deps(hermes),chat},'ciaomanda',task.id)
+    expect(hermes.requests).toHaveLength(0)
+    const before=(await store.tasks('ciaomanda')).length
+    await expect(chat.createChat('ciaomanda','content-creator','Simpan sebagai memori: '+body,{skills:['review-draft']})).rejects.toThrow('tanpa lampiran')
+    expect((await store.tasks('ciaomanda')).length).toBe(before)
+    expect((await store.agentNotes('ciaomanda')).filter(n=>n.body===body)).toHaveLength(1)
+    await store.updateNote('ciaomanda',saved.id,current=>({...current,active:false}),'uji')
+  })
+
   it('stores versioned Content Creator QC before approval and keeps reports brand scoped',async()=>{
     const task=await store.createTask('otca',{agentType:'content-creator',kind:'konten.caption',title:'Uji caption',brief:'Konsep anonim',createdBy:'uji'})
     await runTask(deps(scriptedHermes([{output:'[KONFIRMASI: tanggal]\nCTA: Daftar'}])),'otca',task.id)
@@ -211,9 +751,40 @@ describe.skipIf(!available)('office store, runner and event workflow (Postgres)'
     expect(waiting).toMatchObject({ status: 'waiting_quota', attempts: 0 })
     expect(waiting?.retryAt).toBeTruthy()
 
+    const beforeReset=scriptedHermes([{output:'should not run'}]);await runTask(deps(beforeReset),'otca',task.id);expect(beforeReset.requests).toHaveLength(0)
+    await db.query("UPDATE tasks SET retry_at=now()-interval '1 second' WHERE id=$1",[task.id])
     const failing = scriptedHermes(Array.from({ length: MAX_ATTEMPTS }, () => ({ status: 'failed' as const, output: 'Provider error 500' })))
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) await runTask(deps(failing), 'otca', task.id)
     expect(await store.task('otca', task.id)).toMatchObject({ status: 'failed', attempts: MAX_ATTEMPTS })
+  })
+
+  it('resumes durable model stages and an existing provider run after a quota exception',async()=>{
+    const task=await store.createTask('otca',{agentType:'manager',kind:'konten.chat',title:'Checkpoint quota',brief:'test',createdBy:'uji'})
+    const endpoint={url:'http://hermes',key:'not-stored'},request={input:'page one',instructions:'summarize',sessionId:'s'}
+    let calls=0
+    const first:HermesClient={run:async(_endpoint,req)=>{calls++;if(req.input==='page two'){await req.onRunCreated?.('existing-run');throw new ProviderLimitError('rate limit',{retryAt:new Date(Date.now()+60000).toISOString(),timingSource:'provider',reason:'rate limit'})}return {runId:'first',status:'completed',output:'summary one',model:'model',inputTokens:10,outputTokens:5}}}
+    const client=checkpointHermes(store,task,first)
+    await client.run(endpoint,request,'attempt-one');await expect(client.run(endpoint,{...request,input:'page two'},'attempt-two')).rejects.toBeInstanceOf(ProviderLimitError)
+    const resumed:HermesClient={run:async(_endpoint,req)=>{calls++;expect(req.resumeRunId).toBe('existing-run');return {runId:'existing-run',status:'completed',output:'summary two',model:'model',inputTokens:10,outputTokens:5}}}
+    const fresh=checkpointHermes(store,task,resumed)
+    expect(await fresh.run(endpoint,{...request,sessionId:'different-attempt'},'retry')).toMatchObject({output:'summary one',inputTokens:0,checkpointReused:true})
+    expect((await fresh.run(endpoint,{...request,input:'page two'},'retry')).output).toBe('summary two');expect(calls).toBe(3)
+  })
+  it('reuses completed render bytes after a review retry and invalidates changed source versions',async()=>{
+    const task=await store.createTask('otca',{agentType:'content-creator',kind:'konten.produksi',title:'Render checkpoint',brief:'test',createdBy:'uji'})
+    let renders=0
+    const render=async()=>{renders++;return {content:'render',files:[{name:'slide.png',mime:'image/png',data:Buffer.from('exact render bytes')}],report:{status:'review'}}}
+    await renderedCheckpoint(store,task,{source:'v1'},render)
+    const resumed=await renderedCheckpoint(store,task,{source:'v1'},async()=>{throw new Error('must not rerender')})
+    expect(resumed.files[0].data.toString()).toBe('exact render bytes');expect(renders).toBe(1)
+    await renderedCheckpoint(store,task,{source:'v2'},render);expect(renders).toBe(2)
+  })
+  it('parks structured quota exceptions and honors provider retry time',async()=>{
+    const task=await store.createTask('otca',{agentType:'manager',kind:'konten.chat',title:'Quota exception',brief:'hello',createdBy:'uji'})
+    const client:HermesClient={run:async()=>{throw Object.assign(new Error('Provider throttled'),{status:429,headers:{'retry-after':'75'}})}}
+    const before=Date.now();const result=await runTask(deps(client),'otca',task.id)
+    expect(result.next).toBe('retry');const row=await store.task('otca',task.id)
+    expect(row).toMatchObject({status:'waiting_quota',attempts:0});expect(Date.parse(row!.retryAt!)-before).toBeGreaterThanOrEqual(75000)
   })
 
   it('never shows or changes one brand\'s work from another brand', async () => {
@@ -410,8 +981,7 @@ describe.skipIf(!available)('office store, runner and event workflow (Postgres)'
     const url = new URL(await connections.begin('otca', 'drive', redirect, 'uji'))
     expect(url.searchParams.get('client_id')).toBe('cid')
     expect(url.searchParams.get('code_challenge_method')).toBe('S256')
-    expect(url.searchParams.get('scope')).toContain('drive.readonly')
-    expect(url.searchParams.get('scope')).not.toContain('auth/drive ') // read only
+    expect(url.searchParams.get('scope')?.split(' ')).toContain('https://www.googleapis.com/auth/drive')
     const state = url.searchParams.get('state')!
 
     await expect(connections.complete({ code: 'kode-ok', state: 'bukan-state' })).rejects.toMatchObject({ code: 'state' })
@@ -760,6 +1330,18 @@ describe.skipIf(!available)('office store, runner and event workflow (Postgres)'
     expect(result.text).toContain('Teks hasil halaman 7')
   },60000)
 
+
+  it('preserves provider reset information and completed OCR pages across quota',async()=>{
+    const doc=new PDFDocument({autoFirstPage:false}),chunks:Buffer[]=[]
+    const bytes=new Promise<Buffer>(resolve=>{doc.on('data',b=>chunks.push(b));doc.on('end',()=>resolve(Buffer.concat(chunks)))})
+    doc.addPage();doc.addPage();doc.end()
+    const chat=new ChatWorkspace(store),file=await chat.upload('otca','manager','quota-scan.pdf',await bytes),task=await chat.createChat('otca','manager','Baca scan kuota',{attachmentIds:[file.id]}),full=(await chat.taskAttachment(task,file.id))!
+    const retryAt=new Date(Date.now()+90000).toISOString();let calls=0,limited=true
+    const runtime={run:async()=>{calls++;if(limited&&calls===2)throw new ProviderLimitError('rate limit',{retryAt,timingSource:'provider',reason:'rate limit'});return {runId:'ocr',status:'completed' as const,output:'halaman tersimpan',model:'test',inputTokens:1,outputTokens:1}}}
+    await expect(processPdf(store,task,full,undefined,runtime)).rejects.toMatchObject({limit:{retryAt}})
+    expect((await db.query('SELECT processing FROM chat_attachments WHERE id=$1',[file.id])).rows[0].processing).toMatchObject({status:'waiting_quota',retryAt})
+    limited=false;expect((await processPdf(store,task,full,undefined,runtime)).coverage.completed).toBe(2);expect(calls).toBe(3)
+  },30000)
 
   it('reuses document summaries by content version and budget, and stores cache metrics honestly',async()=>{
     const chat=new ChatWorkspace(store),text='Dokumen panjang '.repeat(2000)

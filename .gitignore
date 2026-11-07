@@ -3,6 +3,7 @@ dist
 build
 *.tgz
 coverage
+tmp/
 *.tsbuildinfo
 .env
 .env.*

@@ -1,5 +1,10 @@
 import { LOCAL_FAQ, mockComments, previewComments } from './social-community.js'
-import { planSocialPost } from './social-schedule.js'
+import { backfillProductionVersions } from './production-projects.js'
+import { planSocialPost, recordSocialPublication } from './social-schedule.js'
+import { ApprovedLibrary } from './approved-library.js'
+import { MetaPublisher } from './meta-publisher.js'
+import { metaConfiguration } from '../integrations/meta-publishing.js'
+import { VideoAttachments } from './video-attachments.js'
 import { evaluateQuality, validateEvaluationIds } from './quality-evaluation.js'
 import type { Server } from 'node:http'
 import express, { type Request, type Response, type Router } from 'express'
@@ -33,6 +38,9 @@ import { TASK_STATUSES, type TaskStatus } from './status.js'
 import { OfficeStore } from './store.js'
 import { ChatWorkspace } from './chat-workspace.js'
 import { installChatRoutes } from './chat-routes.js'
+import { ProductionEngines } from './production-engines.js'
+import { installProductionRoutes } from './production-routes.js'
+import { approvalReview, reviewSummary } from './approval-review.js'
 
 // The blueprint office API (/api/office): brands, tasks, approvals and the event workflow, backed by
 // Postgres, the BullMQ queue and each brand's Hermes. It starts beside the older Ruang routes; when
@@ -54,6 +62,7 @@ const OFFICE_ROLES = [
 ]
 
 export interface OfficeServices {
+  production?: ProductionEngines
   chat?: ChatWorkspace
   contextDir?: string
   db: Db
@@ -63,6 +72,9 @@ export interface OfficeServices {
   bus: OfficeBus
   integrations: Integrations
   connections: Connections
+  library: ApprovedLibrary
+  publisher: MetaPublisher
+  videoAttachments: VideoAttachments
   drive: ReturnType<typeof routedDrive>
   settings?: OfficeSettings
   hermes?: HermesClient
@@ -80,9 +92,14 @@ export async function startOffice(options: OfficeOptions = {}): Promise<OfficeSe
   await syncBrands(db, readBrands(contextDir))
   const bus = new OfficeBus()
   const store = new OfficeStore(db, bus, localFileStore(settings.filesDir))
+  await backfillProductionVersions(store)
   const chat=new ChatWorkspace(store)
+  const production=new ProductionEngines(settings.production??{workDir:settings.filesDir+'/production'})
   const connections = new Connections({ store, envDir: settings.envDir, fetcher: options.fetcher })
   const drive = routedDrive(store, connections, options.fetcher)
+  const library = new ApprovedLibrary(store, connections, options.fetcher)
+  const publisher = new MetaPublisher(store, settings.envDir, options.fetcher)
+  const videoAttachments = new VideoAttachments(store, settings.filesDir+'/video-inputs')
   await drive.refresh()
   const integrations: Integrations = { drive }
   const brandNames = new Map((await store.brands()).map((brand) => [brand.id, brand.name]))
@@ -90,18 +107,20 @@ export async function startOffice(options: OfficeOptions = {}): Promise<OfficeSe
   const queue = new TaskQueue(redisConnection(settings.redisUrl), {
     store,
     chat,
+    production,
+    videoAttachments,
     hermes,
     endpoint: (brandId) => settings.hermes(brandId),
     contextDir,
     brandName: async (brandId) => brandNames.get(brandId) ?? brandId,
     profile: settings.engineProfile,
-  })
+  }, library, publisher)
   if (options.startWorker !== false) {
     queue.start()
     const recovered = await queue.recover(store)
     if (recovered) console.log(`Office: ${recovered} tugas dijadwalkan ulang setelah start.`)
   }
-  return { db, store, events: new EventWorkflow(store, bus, integrations.drive), queue, bus, integrations, connections, drive, settings, hermes, contextDir, chat }
+  return { db, store, events: new EventWorkflow(store, bus, integrations.drive), queue, bus, integrations, connections, drive, library, publisher, videoAttachments,settings, hermes, contextDir, chat, production }
 }
 
 const message = (error: unknown) => error instanceof Error ? error.message : String(error)
@@ -110,6 +129,7 @@ const message = (error: unknown) => error instanceof Error ? error.message : Str
 export function officeRouter(services: Promise<OfficeServices>): Router {
   const router = express.Router()
   installChatRoutes(router,services)
+  installProductionRoutes(router,services)
   let unavailable: string | undefined
   services.catch((error: unknown) => { unavailable = message(error) })
 
@@ -128,6 +148,26 @@ export function officeRouter(services: Promise<OfficeServices>): Router {
   }
   const body = (request: Request) => (request.body ?? {}) as Record<string, unknown>
   const text = (value: unknown) => typeof value === 'string' ? value : undefined
+
+  router.get('/brands/:brand/approved-library',handle(async(office,request)=>{
+    const brand=await brandOf(office,request)
+    return {
+      folderId:(await office.db.query('SELECT folder_id FROM brand_drive_libraries WHERE brand_id=$1',[brand])).rows[0]?.folder_id??null,
+      packages:(await office.db.query('SELECT id,source_task_id,smm_task_id,drive_status,drive_error,drive_folder_id,drive_location,approved_at FROM approved_packages WHERE brand_id=$1 ORDER BY approved_at DESC',[brand])).rows,
+    }
+  }))
+  router.put('/brands/:brand/approved-library',handle(async(office,request)=>office.library.configure(await brandOf(office,request),text(body(request).folderId)??'')))
+  router.post('/brands/:brand/tasks/:id/sync-library',handle(async(office,request)=>{
+    await office.library.sync(await brandOf(office,request),String(request.params.id))
+    return {synced:true}
+  }))
+  router.post('/brands/:brand/tasks/:id/prepare-publication',handle(async(office,request)=>{
+    const brand=await brandOf(office,request),taskId=String(request.params.id)
+    const task=await office.store.prepareApprovedPublication(brand,taskId,LOCAL_ACTOR)
+    await office.queue.enqueue(task)
+    await office.queue.syncLibrary(brand,taskId)
+    return task
+  }))
 
   router.get('/status', handle(async (office) => ({
     integrations: integrationStatuses(office.integrations),
@@ -181,10 +221,22 @@ export function officeRouter(services: Promise<OfficeServices>): Router {
       if (!file) { response.status(404).json({ error: 'Berkas tidak ditemukan.' }); return }
       response.set({
         'Content-Type': file.mime,
-        'Content-Disposition': `attachment; filename="download"; filename*=UTF-8''${encodeURIComponent(file.name)}`,
+        'Content-Disposition': `${request.query.inline==='1'&&['image/png','video/mp4','video/webm','video/quicktime','video/ogg','video/x-m4v','text/vtt'].includes(file.mime)?'inline':'attachment'}; filename="download"; filename*=UTF-8''${encodeURIComponent(file.name)}`,
         'X-Content-Type-Options': 'nosniff',
         'Content-Security-Policy': "sandbox; default-src 'none'",
-      }).send(file.data)
+      })
+      if(file.mime.startsWith('video/')){
+        response.set('Accept-Ranges','bytes')
+        if(request.headers.range){
+          const ranges=request.range(file.data.length,{combine:true})
+          if(ranges===-1){response.status(416).set('Content-Range',`bytes */${file.data.length}`).end();return}
+          if(Array.isArray(ranges)&&ranges.type==='bytes'&&ranges.length===1){
+            const {start,end}=ranges[0]
+            response.status(206).set({'Content-Range':`bytes ${start}-${end}/${file.data.length}`,'Content-Length':String(end-start+1)}).send(file.data.subarray(start,end+1));return
+          }
+        }
+      }
+      response.send(file.data)
     } catch (error) {
       response.status(400).json({ error: message(error) })
     }
@@ -305,12 +357,13 @@ export function officeRouter(services: Promise<OfficeServices>): Router {
         const { connected: appReady, missing } = connectionState(def, process.env, office.settings?.envDir)
         return {
           service: def.service, label: def.label, purpose: def.purpose, level: def.level, auth: def.auth, vars: def.vars, file: def.file, howTo: def.howTo,
-          adapterReady: def.adapterReady, connected: appReady, missing, oneClick: Boolean(def.oauth), modeOptions: def.modes ?? ['mock', 'sandbox', 'live'],
+          adapterReady: def.adapterReady, connected: appReady, missing, oneClick: Boolean(def.oauth), perBrand:def.service==='meta-graph',modeOptions: def.modes ?? ['mock', 'sandbox', 'live'],
           modes: Object.fromEntries(brands.map((brand) => {
             const requested = modes.get(brand.id)?.get(def.service) ?? 'mock'
             const account = connected.find((item) => item.brandId === brand.id && item.service === def.service)
-            const ready = def.oauth ? account?.status === 'active' : appReady
-            return [brand.id, { requested, effective: effectiveMode(requested, ready, def.adapterReady), account: account ? { email: account.account, status: account.status, connectedAt: account.connectedAt } : undefined }]
+            const meta=def.service==='meta-graph'?metaConfiguration(brand.id,'facebook',office.settings?.envDir):undefined
+            const ready = meta ? meta.ready : def.oauth ? account?.status === 'active' : appReady
+            return [brand.id, { requested, ready,effective: effectiveMode(requested, ready, def.adapterReady),missing:meta?[...meta.missing,...meta.problems]:undefined,account: account ? { email: account.account, status: account.status, connectedAt: account.connectedAt } : undefined }]
           })),
         }
       }),
@@ -322,8 +375,14 @@ export function officeRouter(services: Promise<OfficeServices>): Router {
     const mode = body(request).mode
     if (!isMode(mode) || !(def.modes ?? ['mock', 'sandbox', 'live']).includes(mode)) throw new Error(`Mode ${String(mode)} tidak tersedia untuk ${def.label}.`)
     if (mode !== 'mock') {
+      if(def.service==='meta-graph'){
+        const configured=metaConfiguration(brand,'facebook',office.settings?.envDir)
+        if(!configured.ready)throw new Error(`Konfigurasi Meta brand belum lengkap: ${[...configured.missing,...configured.problems].join(', ')}`)
+      }
+      else {
       const account = (await office.store.connections()).find((item) => item.brandId === brand && item.service === def.service)
       if (def.oauth ? account?.status !== 'active' : !connectionState(def, process.env, office.settings?.envDir).connected) throw new Error(`${def.label} belum terhubung untuk brand ini; hubungkan dulu, sampai itu hanya mode mock.`)
+      }
     }
     await office.store.setIntegrationMode(brand, def.service, mode, LOCAL_ACTOR)
     await office.drive.refresh()
@@ -381,7 +440,22 @@ export function officeRouter(services: Promise<OfficeServices>): Router {
   router.post('/brands/:brand/social/mock/classify',handle(async(office,request)=>({brandId:await brandOf(office,request),mode:'mock',items:previewComments(request.body)})))
 
   router.post('/brands/:brand/tasks/:id/social-schedule',handle(async(office,request)=>planSocialPost(office.store,await brandOf(office,request),String(request.params.id),request.body,LOCAL_ACTOR)))
-  router.get('/brands/:brand/social-schedule',handle(async(office,request)=>({delivery:'local-plan-only',items:(await office.store.db.query('SELECT * FROM social_schedule WHERE brand_id=$1 ORDER BY scheduled_at',[await brandOf(office,request)])).rows})))
+  router.get('/brands/:brand/social-schedule',handle(async(office,request)=>({delivery:'manual-or-meta',items:(await office.store.db.query('SELECT s.*,p.post_url,p.published_at,d.state AS delivery_state,d.error AS delivery_error,d.provider_id FROM social_schedule s LEFT JOIN social_publications p ON p.schedule_id=s.id AND p.brand_id=s.brand_id LEFT JOIN social_deliveries d ON d.schedule_id=s.id AND d.brand_id=s.brand_id WHERE s.brand_id=$1 ORDER BY s.scheduled_at',[await brandOf(office,request)])).rows})))
+  router.get('/brands/:brand/meta-publishing',handle(async(office,request)=>office.publisher.readiness(await brandOf(office,request),text(request.query.platform)??'instagram')))
+  router.post('/brands/:brand/meta-publishing/test',handle(async(office,request)=>office.publisher.check(await brandOf(office,request),text(body(request).platform)??'instagram')))
+  router.post('/brands/:brand/social-schedule/:id/dispatch',handle(async(office,request)=>{
+    const brand=await brandOf(office,request)
+    const result=await office.publisher.arm(brand,String(request.params.id),body(request).caption,LOCAL_ACTOR)
+    await office.queue.publishSchedule(brand,result.scheduleId,result.scheduledAt)
+    return result
+  }))
+  router.delete('/brands/:brand/social-schedule/:id/dispatch',handle(async(office,request)=>office.publisher.cancel(await brandOf(office,request),String(request.params.id),LOCAL_ACTOR)))
+  router.post('/brands/:brand/social-schedule/:id/publication',handle(async(office,request)=>{
+    const brand=await brandOf(office,request)
+    const result=await recordSocialPublication(office.store,brand,String(request.params.id),request.body,LOCAL_ACTOR)
+    await office.queue.syncLibrary(brand,result.sourceTaskId)
+    return result
+  }))
 
   router.get('/brands/:brand/tasks', handle(async (office, request) => {
     const status = text(request.query.status)
@@ -395,7 +469,7 @@ export function officeRouter(services: Promise<OfficeServices>): Router {
       if (task.kind !== 'konten.chat' || !task.result) return task
       const { text, artifacts } = extractArtifacts(task.result)
       const files = stored.get(task.id) ?? []
-      return { ...task, text, artifacts: artifacts.map((artifact) => { const file = files.find((item) => item.name === artifact.name); return file ? { ...artifact, assetId: file.id, mime: file.mime } : artifact }) }
+      return { ...task, text, artifacts: [...artifacts.map((artifact) => { const file = files.find((item) => item.name === artifact.name); return file ? { ...artifact, assetId: file.id, mime: file.mime,size:file.size } : artifact }),...files.filter(file=>!artifacts.some(a=>a.name===file.name)).map(file=>({name:file.name,content:file.content??'',assetId:file.id,mime:file.mime,size:file.size}))] }
     })
   }))
 
@@ -456,7 +530,8 @@ export function officeRouter(services: Promise<OfficeServices>): Router {
     if (!task) throw new Error('Tugas tidak ditemukan.')
     const [assets, approvals, history] = await Promise.all([office.store.assets(brandId, task.id), office.store.approvals(brandId, { taskId: task.id }), office.store.taskEvents(brandId, task.id)])
     const orchestration=task.kind==='konten.orchestrasi' ? await orchestrationState(office.store,task) : undefined
-    return { task, assets, approvals, history, orchestration }
+    const files=orchestration?await office.store.artifactFiles(brandId,orchestration.children.map(child=>child.id)):undefined
+    return { task, assets, approvals, history, orchestration:orchestration?{...orchestration,children:orchestration.children.map(child=>({...child,files:files?.get(child.id)??[]}))}:undefined }
   }))
 
   router.post('/brands/:brand/tasks', handle(async (office, request) => {
@@ -501,8 +576,10 @@ export function officeRouter(services: Promise<OfficeServices>): Router {
     const brandId = await brandOf(office, request)
     const approvals = await office.store.approvals(brandId, { open: request.query.open === '1' })
     const usage = await office.store.taskUsage(brandId, [...new Set(approvals.map((approval) => approval.taskId))])
-    return Promise.all(approvals.map(async (approval) => ({ ...approval, approver: APPROVERS[approval.approvalType], usage: usage.get(approval.taskId) ?? null, qc: approval.decision===null ? await office.store.latestContentQc(brandId,approval.taskId) : undefined, task: await office.store.task(brandId, approval.taskId) })))
+    return Promise.all(approvals.map(async (approval) => ({ ...approval, approver: APPROVERS[approval.approvalType], usage: usage.get(approval.taskId) ?? null, review:await reviewSummary(office.store,brandId,approval.taskId), qc: approval.decision===null ? await office.store.latestContentQc(brandId,approval.taskId) : undefined, task: await office.store.task(brandId, approval.taskId) })))
   }))
+
+  router.get('/brands/:brand/approvals/:id/review',handle(async(office,request)=>approvalReview(office.store,await brandOf(office,request),String(request.params.id))))
 
   router.post('/brands/:brand/approvals/:id', handle(async (office, request) => {
     const brandId = await brandOf(office, request)
@@ -510,8 +587,18 @@ export function officeRouter(services: Promise<OfficeServices>): Router {
     const decision = input.decision === 'approved' || input.decision === 'rejected' ? input.decision : undefined
     if (!decision) throw new Error('decision harus "approved" atau "rejected".')
     const result = await office.store.decide(brandId, String(request.params.id), { decision, note: text(input.note), actor: LOCAL_ACTOR })
-    if (decision === 'approved') await office.events.onApproved(result.task)
-    else await office.queue.enqueue(result.task)
+    if (decision === 'approved') {
+      await office.events.onApproved(result.task)
+      if(result.handoffTask){
+        await office.queue.enqueue(result.handoffTask)
+        await office.queue.syncLibrary(brandId,result.task.id)
+      }
+      else {
+        const pack=(await office.db.query('SELECT source_task_id FROM approved_packages WHERE brand_id=$1 AND smm_task_id=$2',[brandId,result.task.id])).rows[0]
+        if(pack)await office.queue.syncLibrary(brandId,pack.source_task_id)
+      }
+    }
+    else await office.queue.enqueue(result.revisionTask??result.task)
     return result
   }))
 

@@ -12,6 +12,47 @@ export function scheduleInput(value:unknown,now=Date.now()) {
  return {platform:String(input.platform),scheduledAt:new Date(time).toISOString()}
 }
 
+export function publicationInput(value:unknown,platform:string,now=Date.now()) {
+ const input=value as {postUrl?:unknown;publishedAt?:unknown}|null
+ if(typeof input?.postUrl!=='string'||typeof input.publishedAt!=='string')throw new Error('Isi tautan posting dan waktu publikasi.')
+ let url:URL
+ try{url=new URL(input.postUrl)}catch{throw new Error('Tautan posting tidak valid.')}
+ const host=url.hostname.replace(/^www\./,'')
+ const valid=platform==='instagram'?host==='instagram.com'&&/^\/(p|reel)\/[^/]+\/?$/.test(url.pathname):platform==='facebook'&&['facebook.com','m.facebook.com','fb.watch'].includes(host)&&url.pathname!=='/'
+ if(url.protocol!=='https:'||url.username||url.password||!valid)throw new Error('Gunakan tautan posting HTTPS dari platform yang dipilih.')
+ if(!/^\d{4}-\d\d-\d\dT.*(?:Z|[+-]\d\d:\d\d)$/.test(input.publishedAt)||!Number.isFinite(Date.parse(input.publishedAt))||Date.parse(input.publishedAt)>now)throw new Error('Waktu publikasi harus valid dan sudah terjadi.')
+ return {postUrl:url.toString(),publishedAt:new Date(input.publishedAt).toISOString()}
+}
+
+export async function recordSocialPublication(store:OfficeStore,brand:string,scheduleId:string,input:unknown,actor:string) {
+ return transaction(store.db,async tx=>{
+  if(actor!=='worker:meta'){
+   const lease=(await tx.query('SELECT pg_try_advisory_xact_lock(hashtextextended($1,0)) AS locked',[`publish:${brand}:${scheduleId}`])).rows[0]
+   if(!lease.locked)throw new Error('Pengiriman Meta sedang diproses. Tunggu konfirmasi sebelum mencatat publikasi.')
+  }
+  const schedule=(await tx.query('SELECT * FROM social_schedule WHERE brand_id=$1 AND id=$2 FOR UPDATE',[brand,scheduleId])).rows[0]
+  if(!schedule||!['planned','published'].includes(schedule.status))throw new Error('Jadwal aktif tidak ditemukan di brand ini.')
+  const delivery=(await tx.query('SELECT state,provider_id FROM social_deliveries WHERE brand_id=$1 AND schedule_id=$2',[brand,scheduleId])).rows[0]
+  if(actor!=='worker:meta'&&delivery&&(delivery.state==='preparing'||(delivery.state==='publishing'&&!delivery.provider_id)))throw new Error('Pengiriman Meta sedang berlangsung. Tunggu hasil sebelum mencatat publikasi.')
+  const receipt=publicationInput(input,schedule.platform)
+  const approval=(await tx.query("SELECT id FROM approvals WHERE brand_id=$1 AND id=$2 AND task_id=$3 AND approval_type='publikasi' AND decision='approved'",[brand,schedule.approval_id,schedule.task_id])).rows[0]
+  if(!approval)throw new Error('Persetujuan publikasi tidak ditemukan.')
+  const pack=(await tx.query('SELECT * FROM approved_packages WHERE brand_id=$1 AND smm_task_id=$2',[brand,schedule.task_id])).rows[0]
+  if(!pack)throw new Error('Jadwal belum terhubung dengan paket Approved.')
+  const existing=(await tx.query('SELECT * FROM social_publications WHERE brand_id=$1 AND schedule_id=$2',[brand,scheduleId])).rows[0]
+  if(existing){
+   if(existing.post_url!==receipt.postUrl||new Date(existing.published_at).toISOString()!==receipt.publishedAt)throw new Error('Publikasi ini sudah dicatat dengan data berbeda.')
+   return {sourceTaskId:pack.source_task_id,publication:existing}
+  }
+  const publication=(await tx.query('INSERT INTO social_publications(brand_id,schedule_id,package_id,post_url,published_at,recorded_by) VALUES($1,$2,$3,$4,$5,$6) RETURNING *',[brand,scheduleId,pack.id,receipt.postUrl,receipt.publishedAt,actor])).rows[0]
+  await tx.query("UPDATE social_schedule SET status='published' WHERE brand_id=$1 AND id=$2",[brand,scheduleId])
+  await tx.query("UPDATE social_deliveries SET state='published',error=NULL,updated_at=now() WHERE brand_id=$1 AND schedule_id=$2",[brand,scheduleId])
+  await tx.query("UPDATE approved_packages SET drive_status='pending' WHERE brand_id=$1 AND id=$2",[brand,pack.id])
+  await store.logEvent(tx,{brandId:brand,id:schedule.task_id},'publication_recorded',{scheduleId,...receipt,actor,delivery:actor==='worker:meta'?'meta-api':'manual-confirmation'})
+  return {sourceTaskId:pack.source_task_id,publication}
+ })
+}
+
 export async function planSocialPost(store:OfficeStore,brand:string,taskId:string,input:unknown,actor:string) {
  const plan=scheduleInput(input)
  return transaction(store.db,async tx=>{

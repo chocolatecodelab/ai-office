@@ -133,6 +133,17 @@ td { border-bottom: 0.5pt solid #e5e7eb; padding: 5pt 8pt; vertical-align: top; 
 tr { break-inside: avoid; }
 tbody tr:nth-child(even) td { background: #f9fafb; }
 .note { color: #6b7280; }
+@media screen {
+  html { background: #eef0f2; padding: 24px; }
+  body { max-width: 960px; margin: 0 auto; padding: 48px; min-height: calc(100vh - 48px); box-shadow: 0 1px 8px #0000000d; overflow-wrap: anywhere; }
+  table { display: block; overflow-x: auto; }
+}
+@media screen and (max-width: 640px) {
+  html { padding: 12px; }
+  body { padding: 24px 20px; min-height: calc(100vh - 24px); }
+  h1.title { font-size: 19pt; }
+  .masthead { gap: 12px; flex-wrap: wrap; }
+}
 </style></head><body>
 <header class="masthead">
   ${brand.logo ? `<img src="${brand.logo}" alt="${escapeHtml(brand.name)}">` : `<span class="brand" style="color:${brand.accent === '#F3CF45' ? '#25272B' : brand.accent}">${escapeHtml(brand.name)}</span>`}

@@ -141,7 +141,7 @@ export class OfficeStore {
   async summary(brandId: string): Promise<{ queued: number; approvals: number; waitingQuota: number }> {
     const { rows } = await this.db.query(`SELECT
       (SELECT count(*)::int FROM tasks WHERE brand_id = $1 AND status = 'queued') AS queued,
-      (SELECT count(*)::int FROM approvals WHERE brand_id = $1 AND decision IS NULL) AS approvals,
+      (SELECT count(*)::int FROM approvals a JOIN tasks t ON t.id=a.task_id AND t.brand_id=a.brand_id WHERE a.brand_id = $1 AND a.decision IS NULL AND t.status='waiting_approval') AS approvals,
       (SELECT count(*)::int FROM tasks WHERE brand_id = $1 AND status = 'waiting_quota') AS "waitingQuota"`, [brandId])
     return rows[0]
   }
@@ -229,7 +229,11 @@ export class OfficeStore {
     return rows[0]?.paused ?? true
   }
 
+  get checkpointFileStore(){return this.files}
+
   async createTask(brandId: string, input: NewTask, client: Queryable = this.db): Promise<Task> {
+    if(input.kind==='konten.carousel-produksi'&&(input.agentType!=='content-creator'||!input.parentId))throw new Error('Produksi carousel tim harus ditugaskan kepada Content Creator melalui Manager.')
+    if(input.kind==='video.rencana-produksi'&&(input.agentType!=='video-editor'||!input.parentId))throw new Error('Rencana produksi video tim harus ditugaskan kepada Video Editor melalui Manager.')
     if(input.kind==='konten.orchestrasi' && (input.agentType!=='manager' || input.parentId))throw new Error('Orkestrasi hanya untuk Manager sebagai tugas induk.')
     approvalTypeFor(input.kind) // reject work types without an approval route up front
     const agent = await client.query('SELECT active FROM agents WHERE brand_id = $1 AND agent_type = $2', [brandId, input.agentType])
@@ -322,6 +326,63 @@ export class OfficeStore {
     return result
   }
 
+  /** Local pipeline results have no fictional model run or token cost. */
+  async submitProduction(brandId:string,taskId:string,output:import('./production-engines.js').ProductionResult) {
+    if(!this.files)throw new Error('Penyimpanan hasil produksi belum tersedia.')
+    const files=await Promise.all(output.files.map(async file=>({...file,key:await this.files!.put(brandId,file.name.split('.').pop()??'bin',file.data)})))
+    const result=await transaction(this.db,async tx=>{
+      await tx.query('SELECT id FROM tasks WHERE brand_id=$1 AND id=$2 FOR UPDATE',[brandId,taskId])
+      const current=await this.task(brandId,taskId,tx)
+      if(!current||current.status!=='running')throw new Error('Tugas produksi sudah dihentikan atau statusnya berubah.')
+      if(await this.isPaused(brandId,current.agentType))throw new Error('Agent dijeda; hasil belum diajukan.')
+      let version=Number((await tx.query('SELECT coalesce(max(version),0) AS n FROM assets WHERE task_id=$1',[taskId])).rows[0].n)
+      await tx.query('INSERT INTO assets(task_id,brand_id,kind,version,content) VALUES($1,$2,$3,$4,$5)',[taskId,brandId,current.kind,++version,output.content])
+      for(const file of files)await tx.query('INSERT INTO assets(task_id,brand_id,kind,version,content,name,mime,storage_key,size_bytes) VALUES($1,$2,\'artifact\',$3,$4,$5,$6,$7,$8)',[taskId,brandId,++version,file.mime.startsWith('text/')||file.mime==='application/json'?file.data.toString('utf8'):`Hasil pipeline: ${file.name}`,file.name,file.mime,file.key,file.data.length])
+      await this.logEvent(tx,current,'production_completed',output.report)
+      const source=(await tx.query("SELECT payload->>'sourceTaskId' AS id FROM task_events WHERE brand_id=$1 AND task_id=$2 AND type='carousel_source' ORDER BY id DESC LIMIT 1",[brandId,taskId])).rows[0]?.id
+      if(source&&source!==taskId){
+        const previous=await this.task(brandId,source,tx)
+        if(previous?.agentType===current.agentType&&previous.status==='waiting_approval'){
+          await this.transition(brandId,previous.id,'cancelled',{actor:'worker:production',reason:'Digantikan hasil revisi yang sudah selesai'},tx)
+          await this.logEvent(tx,previous,'result_superseded',{replacementTaskId:taskId})
+        }
+      }
+      await tx.query("UPDATE production_jobs SET stage='review',report=$3,updated_at=now() WHERE brand_id=$1 AND task_id=$2",[brandId,taskId,JSON.stringify(output.report)])
+      const task=await this.transition(brandId,taskId,'waiting_approval',{actor:`agent:${current.agentType}`,reason:'hasil pipeline lokal; perlu review manusia',patch:{result:output.content,error:null}},tx)
+      const approval=(await tx.query('INSERT INTO approvals(task_id,brand_id,approval_type) VALUES($1,$2,$3) RETURNING *',[taskId,brandId,approvalTypeFor(current.kind)])).rows[0]
+      if(current.parentId){
+        const parent=await this.task(brandId,current.parentId,tx)
+        if(parent?.kind==='konten.chat')await this.completeProductionChat(brandId,parent.id,taskId,tx)
+      }
+      return {task,approval:toApproval(approval)}
+    })
+    this.bus.publish({type:'approval',brandId,approvalId:result.approval.id,taskId,decision:null})
+    return result
+  }
+
+  /** Finish the conversation, while the separate production task still awaits human approval. */
+  async completeProductionChat(brandId:string,chatId:string,productionId:string,client?:pg.PoolClient){
+    const work=async(tx:pg.PoolClient)=>{
+      await tx.query('SELECT id FROM tasks WHERE brand_id=$1 AND id=$2 FOR UPDATE',[brandId,chatId])
+      const parent=await this.task(brandId,chatId,tx),child=await this.task(brandId,productionId,tx)
+      if(!parent||parent.kind!=='konten.chat'||!child||child.parentId!==chatId||child.agentType!==parent.agentType||!['waiting_approval','approved','done'].includes(child.status))throw new Error('Hasil produksi tidak terhubung dengan percakapan ini.')
+      if(parent.status==='done')return parent
+      if(!['queued','running'].includes(parent.status))throw new Error('Percakapan produksi sudah dihentikan atau dijeda.')
+      const count=Number((await tx.query("SELECT count(*) AS n FROM assets WHERE brand_id=$1 AND task_id=$2 AND name ~ '^slide-[0-9]+[.]png$'",[brandId,productionId])).rows[0].n)
+      const nativeSnapshot=(await tx.query("SELECT 1 FROM assets WHERE brand_id=$1 AND task_id=$2 AND name='storyboard-visual.html'",[brandId,productionId])).rowCount
+      const videoResult=(await tx.query("SELECT 1 FROM assets WHERE brand_id=$1 AND task_id=$2 AND mime='video/mp4'",[brandId,productionId])).rowCount
+      const thumbnailOnly=(await tx.query("SELECT 1 FROM assets WHERE brand_id=$1 AND task_id=$2 AND name='thumbnail-revision.json'",[brandId,productionId])).rowCount
+      const videoPreview=(await tx.query("SELECT 1 FROM assets WHERE brand_id=$1 AND task_id=$2 AND name='video-revision.json'",[brandId,productionId])).rowCount
+      const restored=(await tx.query("SELECT payload->>'restoredFrom' AS id FROM production_jobs WHERE brand_id=$1 AND task_id=$2",[brandId,productionId])).rows[0]?.id
+      const reply=restored?'Versi sebelumnya dipulihkan sebagai versi baru. Berkas tersedia di bawah; hasil ini memerlukan persetujuan ulang sebelum publikasi.':videoPreview?'Preview revisi video tersedia di bawah. Tinjau adegan yang berubah sebelum render final; MP4 sebelumnya tetap.':thumbnailOnly?'Thumbnail sudah direvisi. Cover 9:16 dan 3:4 tersedia di bawah untuk ditinjau. MP4 tetap, tanpa render ulang video.':videoResult?'Video selesai dirender. MP4 dengan audio asli yang dinormalisasi dan laporan pemeriksaan tersedia di bawah. Tinjau hasil sebelum publikasi.':nativeSnapshot?'Storyboard visual native siap ditinjau. Buka storyboard-visual.html untuk melihat komposisi tiap adegan. Ini snapshot pipeline asli; persetujuan native dan render final belum dijalankan.':child.agentType==='video-editor'?'Naskah dan rencana adegan siap ditinjau. Berkas proyek dan subtitle draf tersedia di bawah.\n\nTiming subtitle masih estimasi. Lengkapi bahan, buat storyboard visual, dan tinjau hasilnya sebelum render penuh.':`${count} slide carousel selesai dibuat. Gambar dan berkas unduhan tersedia di bawah.\n\nHasil masih draf untuk ditinjau; belum dipublikasikan. Caption, spesifikasi, dan laporan QA juga tersimpan di Folder agent.`
+      await tx.query('INSERT INTO assets(task_id,brand_id,kind,version,content) SELECT $1,$2,\'konten.chat\',coalesce(max(version),0)+1,$3 FROM assets WHERE task_id=$1',[chatId,brandId,reply])
+      if(parent.status==='queued')await this.transition(brandId,chatId,'running',{actor:'worker:production'},tx)
+      await this.logEvent(tx,parent,'chat_production_completed',{taskId:productionId,slides:count})
+      return this.transition(brandId,chatId,'done',{actor:'worker:production',reason:'hasil produksi ditampilkan di chat',patch:{result:reply,error:null,completed_at:new Date().toISOString()}},tx)
+    }
+    return client?work(client):transaction(this.db,work)
+  }
+
   /**
    * Stores a finished chat reply. Chat is conversation, not publication, so the reply finishes
    * as done without an approval; every other kind of work goes through submitForApproval.
@@ -400,8 +461,8 @@ export class OfficeStore {
     return rows.map(toNote)
   }
 
-  async addNote(brandId: string, input: NoteInput, actor: string): Promise<AgentNote> {
-    return transaction(this.db, async (tx) => {
+  async addNote(brandId: string, input: NoteInput, actor: string, client?: Queryable): Promise<AgentNote> {
+    const work = async (tx: Queryable) => {
       const count = Number((await tx.query('SELECT count(*) FROM agent_notes WHERE brand_id = $1', [brandId])).rows[0].count)
       if (count >= NOTE_LIMITS.perBrand) throw new Error(`Satu brand maksimal ${NOTE_LIMITS.perBrand} catatan; hapus yang tidak terpakai dulu.`)
       const { rows } = await tx.query(
@@ -410,7 +471,8 @@ export class OfficeStore {
       const note = toNote(rows[0])
       await audit(tx, { actor, action: 'note.create', objectType: 'agent-note', objectId: note.id, brandId, after: input })
       return note
-    })
+    }
+    return client ? work(client) : transaction(this.db, work)
   }
 
   /** Changes a note; `change` is checked against the note as it is now. Undefined when the brand has no such note. */
@@ -568,6 +630,8 @@ export class OfficeStore {
    * at the new file. Used when a PDF was made by an older or fallback renderer. The old file stays in the store.
    */
   async rerenderPdf(brandId: string, assetId: string, actor: string): Promise<{ size: number }> {
+    const approved=(await this.db.query('SELECT id FROM approved_packages WHERE brand_id=$1 AND assets @> $2::jsonb LIMIT 1',[brandId,JSON.stringify([{id:assetId}])])).rows[0]
+    if(approved)throw new Error('PDF ini termasuk versi yang sudah disetujui. Buat versi revisi untuk mengubahnya.')
     if (!this.files) throw new Error('Penyimpanan berkas belum aktif.')
     const { rows } = await this.db.query(`SELECT name, content FROM assets WHERE brand_id = $1 AND id::text = $2 AND storage_key IS NOT NULL AND mime = 'application/pdf'`, [brandId, assetId])
     if (!rows[0]) throw new Error('PDF tidak ditemukan di brand ini.')
@@ -575,6 +639,8 @@ export class OfficeStore {
     const pdf = await renderDocumentPdf(rows[0].content as string, { name: rows[0].name as string, brand: brandStyle(brandId, brand?.name ?? brandId, brand?.color ?? '') })
     const key = await this.files.put(brandId, 'pdf', pdf)
     await transaction(this.db, async (tx) => {
+      await tx.query('SELECT t.id FROM tasks t JOIN assets a ON a.task_id=t.id AND a.brand_id=t.brand_id WHERE a.brand_id=$1 AND a.id::text=$2 FOR UPDATE OF t',[brandId,assetId])
+      if((await tx.query('SELECT id FROM approved_packages WHERE brand_id=$1 AND assets @> $2::jsonb LIMIT 1',[brandId,JSON.stringify([{id:assetId}])])).rows[0])throw new Error('PDF sudah disetujui saat proses berlangsung. Buat versi revisi untuk mengubahnya.')
       await tx.query('UPDATE assets SET storage_key = $3, size_bytes = $4 WHERE brand_id = $1 AND id::text = $2', [brandId, assetId, key, pdf.length])
       await audit(tx, { actor, action: 'asset.rerender', objectType: 'asset', objectId: assetId, brandId, after: { size: pdf.length } })
     })
@@ -582,11 +648,13 @@ export class OfficeStore {
   }
 
   /** The stored files of chat tasks (id and name per task), so a chat can link a file card to its download. */
-  async artifactFiles(brandId: string, taskIds: string[]): Promise<Map<string, Array<{ id: string; name: string; mime: string }>>> {
-    const files = new Map<string, Array<{ id: string; name: string; mime: string }>>()
+  async artifactFiles(brandId: string, taskIds: string[]): Promise<Map<string, Array<{ id: string; name: string; mime: string;size?:number;content?:string }>>> {
+    const files = new Map<string, Array<{ id: string; name: string; mime: string;size?:number;content?:string }>>()
     if (taskIds.length === 0) return files
     const { rows } = await this.db.query(`SELECT id, task_id, name, mime FROM assets WHERE brand_id = $1 AND task_id = ANY($2::uuid[]) AND storage_key IS NOT NULL ORDER BY version`, [brandId, taskIds])
     for (const row of rows) files.set(row.task_id, [...(files.get(row.task_id) ?? []), { id: row.id, name: row.name, mime: row.mime }])
+    const produced=await this.db.query(`SELECT a.id,t.parent_id,a.name,a.mime,a.size_bytes,a.content FROM assets a JOIN tasks t ON t.id=a.task_id AND t.brand_id=a.brand_id JOIN tasks chat ON chat.id=t.parent_id AND chat.brand_id=t.brand_id AND chat.agent_type=t.agent_type WHERE a.brand_id=$1 AND t.kind IN ('konten.produksi','video.proyek') AND chat.kind='konten.chat' AND t.parent_id=ANY($2::uuid[]) AND a.storage_key IS NOT NULL ORDER BY a.version`,[brandId,taskIds])
+    for(const row of produced.rows)files.set(row.parent_id,[...(files.get(row.parent_id)??[]),{id:row.id,name:row.name,mime:row.mime,size:row.size_bytes,content:row.mime==='image/png'?'':row.content}])
     return files
   }
 
@@ -599,8 +667,9 @@ export class OfficeStore {
    * Records a person's decision (FR-22): approval moves the task to approved, rejection needs a note
    * and sends the task back to the agent as a revision.
    */
-  async decide(brandId: string, approvalId: string, input: { decision: 'approved' | 'rejected'; note?: string; actor: string }): Promise<{ approval: Approval; task: Task }> {
+  async decide(brandId: string, approvalId: string, input: { decision: 'approved' | 'rejected'; note?: string; actor: string }): Promise<{ approval: Approval; task: Task;revisionTask?:Task;handoffTask?:Task }> {
     const note = input.note?.trim() || null
+    if(note&&note.length>4000)throw new Error('Arahan review maksimal 4.000 karakter.')
     if (input.decision === 'rejected' && !note) throw new Error('Penolakan wajib disertai catatan untuk revisi.')
     const result = await transaction(this.db, async (tx) => {
       const { rows } = await tx.query('SELECT * FROM approvals WHERE brand_id = $1 AND id = $2 FOR UPDATE', [brandId, approvalId])
@@ -610,15 +679,70 @@ export class OfficeStore {
         'UPDATE approvals SET decision = $3, note = $4, decided_by = $5, decided_at = now() WHERE brand_id = $1 AND id = $2 RETURNING *',
         [brandId, approvalId, input.decision, note, input.actor])
       const approval = toApproval(decided.rows[0])
-      const task = input.decision === 'approved'
+      let task = input.decision === 'approved'
         ? await this.transition(brandId, approval.taskId, 'approved', { actor: input.actor, reason: note ?? 'disetujui', patch: { completed_at: new Date().toISOString() } }, tx)
         // A revision is new work, not a failure: it starts with a fresh retry budget (FR-13).
         : await this.transition(brandId, approval.taskId, 'revision', { actor: input.actor, reason: note ?? undefined, patch: { attempts: 0 } }, tx)
       await audit(tx, { actor: input.actor, action: `approval.${input.decision}`, objectType: 'approval', objectId: approvalId, brandId, after: { taskId: approval.taskId, note } })
-      return { approval, task }
+      let revisionTask:Task|undefined
+      let handoffTask:Task|undefined
+      if(input.decision==='approved'&&approval.approvalType==='publikasi'&&task.agentType==='social-media-manager'&&task.kind==='publikasi.caption'){
+        const asset=(await tx.query('SELECT id,content FROM assets WHERE brand_id=$1 AND task_id=$2 AND kind=$3 ORDER BY version DESC LIMIT 1',[brandId,task.id,task.kind])).rows[0]
+        if(!asset||asset.content!==task.result)throw new Error('Versi caption publikasi tidak cocok dengan hasil yang ditinjau.')
+        await tx.query("UPDATE approved_packages SET publication_asset_id=$3,drive_status='pending' WHERE brand_id=$1 AND smm_task_id=$2",[brandId,task.id,asset.id])
+      }
+      if(input.decision==='approved'&&approval.approvalType==='konten'&&task.kind==='konten.produksi'&&task.agentType==='content-creator'){
+        handoffTask=await this.createApprovedPackage(brandId,task,approval,input.actor,tx)
+      }
+      if(input.decision==='rejected'&&task.kind==='konten.produksi'&&task.agentType==='content-creator'){
+        revisionTask=await this.createTask(brandId,{agentType:task.agentType,kind:'konten.chat',title:'Revisi hasil berdasarkan review',brief:`Revisi carousel yang ditinjau. Arahan reviewer: ${(note??'').slice(0,4000)}\n\nBrief awal: ${task.brief.slice(0,6000)}\nPertahankan bagian yang tidak diminta berubah. Render ulang dan tampilkan hasil revisi di chat.`,createdBy:input.actor},tx)
+        await this.logEvent(tx,revisionTask,'production_revision_requested',{sourceTaskId:task.id,approvalId})
+        task=await this.transition(brandId,task.id,'cancelled',{actor:input.actor,reason:'Versi dikembalikan untuk revisi; tugas pengganti dibuat'},tx)
+      }
+      if(input.decision==='rejected'&&task.kind==='video.proyek'){
+        const original=(await tx.query('SELECT payload FROM production_jobs WHERE brand_id=$1 AND task_id=$2',[brandId,task.id])).rows[0]
+        if(!original)throw new Error('Draf proyek sumber tidak ditemukan.')
+        const brief=`Arahan revisi: ${(note??'').slice(0,4000)}\n\nBrief awal: ${task.brief.slice(0,6000)}`
+        if(original.payload.video?.plan){
+          revisionTask=await this.createTask(brandId,{agentType:task.agentType,kind:'konten.chat',title:`Revisi: ${task.title}`.slice(0,160),brief:'Revisi rencana produksi video. '+brief,createdBy:input.actor},tx)
+          await this.logEvent(tx,revisionTask,'video_revision_requested',{sourceTaskId:task.id,approvalId})
+        }else{
+          revisionTask=await this.createTask(brandId,{agentType:task.agentType,kind:task.kind,title:`Revisi: ${task.title}`.slice(0,160),brief,createdBy:input.actor},tx)
+          await tx.query('INSERT INTO production_jobs(task_id,brand_id,agent_type,payload) VALUES($1,$2,$3,$4)',[revisionTask.id,brandId,task.agentType,JSON.stringify({...original.payload,title:revisionTask.title,brief})])
+        }
+        task=await this.transition(brandId,task.id,'cancelled',{actor:input.actor,reason:'Brief proyek dikembalikan untuk revisi'},tx)
+      }
+      return { approval, task,revisionTask,handoffTask }
     })
     this.bus.publish({ type: 'approval', brandId, approvalId, taskId: result.task.id, decision: input.decision })
     return result
+  }
+
+  private async createApprovedPackage(brandId:string,task:Task,approval:Approval,actor:string,tx:Queryable):Promise<Task> {
+    const files=(await tx.query('SELECT id,name,mime,version,size_bytes FROM assets WHERE brand_id=$1 AND task_id=$2 AND kind=$3 ORDER BY name,id',[brandId,task.id,'artifact'])).rows
+    const deliverables=files.filter(file=>/^slide-\d+\.(png|jpe?g)$/i.test(file.name??'')||/\.pdf$/i.test(file.name??'')||/^caption\.(md|txt)$/i.test(file.name??''))
+    if(!deliverables.length)throw new Error('Paket hasil produksi belum memiliki berkas untuk disetujui.')
+    const handoff=await this.createTask(brandId,{agentType:'social-media-manager',kind:'publikasi.caption',title:`Siapkan publikasi: ${task.title}`.slice(0,160),brief:`Siapkan caption dan rekomendasi jadwal publikasi untuk paket konten yang sudah disetujui.\nTugas sumber: ${task.id}\nApproval: ${approval.id}\nBrief konten: ${task.brief}\nHasil konten: ${task.result??''}\nBerkas versi approved: ${JSON.stringify(deliverables)}\nPertahankan urutan slide berdasarkan nama berkas. Minta arahan jika kanal atau jadwal belum ditentukan. Hasil persiapan memerlukan approval publikasi. Jangan mengklaim konten sudah terbit.`,createdBy:actor},tx)
+    await tx.query('INSERT INTO approved_packages(brand_id,source_task_id,approval_id,smm_task_id,assets,approved_by,approved_at) VALUES($1,$2,$3,$4,$5,$6,$7)',[brandId,task.id,approval.id,handoff.id,JSON.stringify(deliverables),approval.decidedBy??actor,approval.decidedAt])
+    await this.logEvent(tx,task,'approved_package_created',{approvalId:approval.id,smmTaskId:handoff.id,assetIds:deliverables.map(file=>file.id),driveStatus:'pending'})
+    return handoff
+  }
+
+  async prepareApprovedPublication(brandId:string,taskId:string,actor:string):Promise<Task> {
+    return transaction(this.db,async tx=>{
+      await tx.query('SELECT id FROM tasks WHERE brand_id=$1 AND id=$2 FOR UPDATE',[brandId,taskId])
+      const task=await this.task(brandId,taskId,tx)
+      if(!task||!['approved','done'].includes(task.status)||task.kind!=='konten.produksi'||task.agentType!=='content-creator')throw new Error('Pilih hasil produksi brand ini yang sudah disetujui.')
+      const existing=(await tx.query('SELECT smm_task_id FROM approved_packages WHERE brand_id=$1 AND source_task_id=$2',[brandId,taskId])).rows[0]
+      if(existing){
+        const handoff=await this.task(brandId,existing.smm_task_id,tx)
+        if(!handoff)throw new Error('Tugas SMM paket tidak ditemukan.')
+        return handoff
+      }
+      const approval=(await tx.query('SELECT * FROM approvals WHERE brand_id=$1 AND task_id=$2 ORDER BY created_at DESC,id DESC LIMIT 1',[brandId,taskId])).rows[0]
+      if(approval?.decision!=='approved'||approval.approval_type!=='konten')throw new Error('Persetujuan konten yang sah diperlukan.')
+      return this.createApprovedPackage(brandId,task,toApproval(approval),actor,tx)
+    })
   }
 
   /** The reviewer notes of every rejected version, oldest first; a revision run gets them all. */

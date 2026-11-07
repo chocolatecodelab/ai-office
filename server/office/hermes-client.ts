@@ -1,3 +1,4 @@
+import {ProviderLimitError,quotaInfo,type LimitInfo} from './provider-limit.js'
 import type { HermesEndpoint } from '../settings.js'
 
 // Talks to one brand's Hermes container through its Runs API (docs/spike-hermes.md): a run is
@@ -5,6 +6,9 @@ import type { HermesEndpoint } from '../settings.js'
 // completions, reports failures as a failed status instead of an HTTP 200 reply.
 
 export interface RunRequest {
+  resumeRunId?:string
+  onRunCreated?:(id:string)=>Promise<void>
+
   images?: string[]
   input: string
   instructions: string
@@ -16,6 +20,9 @@ export interface RunRequest {
 }
 
 export interface RunResult {
+  limit?:LimitInfo
+  checkpointReused?:boolean
+
   cacheReadTokens?: number | null
   cacheWriteTokens?: number | null
   runId: string
@@ -27,6 +34,7 @@ export interface RunResult {
 }
 
 export interface HermesClient {
+  invalidateLastCompleted?():Promise<void>
   run(endpoint: HermesEndpoint, request: RunRequest, idempotencyKey: string): Promise<RunResult>
 }
 
@@ -37,6 +45,13 @@ export function cacheUsage(usage?:HermesUsage) {
   return {cacheReadTokens:valid(usage?.cache_read_tokens??usage?.cache_read_input_tokens??usage?.input_tokens_details?.cached_tokens??usage?.prompt_tokens_details?.cached_tokens),cacheWriteTokens:valid(usage?.cache_write_tokens??usage?.cache_creation_input_tokens)}
 }
 
+async function httpFailure(response:Response){
+ const body=(await response.text()).slice(0,32000)
+ const busy=response.status===429&&/concurrent|active runs|server busy|run capacity/i.test(body)
+ const limit=busy?undefined:quotaInfo(body,response.headers,Date.now(),response.status)
+ if(limit)throw new ProviderLimitError('Provider membatasi permintaan (HTTP '+response.status+'). '+body.slice(0,500),limit)
+ throw new HermesError('Hermes HTTP '+response.status+': '+body.slice(0,500),busy,response.status>=400&&response.status<500&&response.status!==408&&response.status!==429)
+}
 export function createHermesClient(options: { pollMs?: number; timeoutMs?: number; fetcher?: typeof fetch } = {}): HermesClient {
   const pollMs = options.pollMs ?? 3000
   const timeoutMs = options.timeoutMs ?? 20 * 60 * 1000
@@ -48,13 +63,16 @@ export function createHermesClient(options: { pollMs?: number; timeoutMs?: numbe
       const headers = { Authorization: `Bearer ${endpoint.key}`, 'Content-Type': 'application/json' }
       if(request.images?.length) {
         const response=await fetcher(`${endpoint.url}/v1/responses`,{method:'POST',headers:{...headers,'Idempotency-Key':idempotencyKey},signal:AbortSignal.timeout(timeoutMs),body:JSON.stringify({input:[{role:'user',content:[{type:'input_text',text:request.input},...request.images.map(url=>({type:'input_image',image_url:url}))]}],instructions:request.instructions,session_id:request.sessionId,provider:request.provider??'openai-codex',...(request.model?{model:request.model}:{}),...(request.reasoningEffort?{model_options:{reasoning_effort:request.reasoningEffort}}:{})})})
-        if(!response.ok)throw new HermesError(`Pembacaan gambar Hermes gagal (HTTP ${response.status}). Pastikan versi Hermes dan model mendukung gambar.`,response.status===429,response.status>=400 && response.status<500 && response.status!==429)
-        const data=await response.json() as {id?:string;status?:string;model?:string;output_text?:string;output?:Array<{content?:Array<{type?:string;text?:string}>}>;usage?:HermesUsage}
+        if(!response.ok)await httpFailure(response)
+        const data=await response.json() as {id?:string;status?:string;model?:string;output_text?:string;output?:Array<{content?:Array<{type?:string;text?:string}>}>;usage?:HermesUsage;error?:unknown}
         const output=data.output_text ?? data.output?.flatMap(item=>item.content??[]).filter(part=>part.type==='output_text').map(part=>part.text??'').join('\n') ?? ''
-        return {...cacheUsage(data.usage),runId:data.id??request.sessionId,status:data.status==='failed'?'failed':'completed',output,model:data.model??request.model??'hermes-agent',inputTokens:data.usage?.input_tokens??0,outputTokens:data.usage?.output_tokens??0}
+        return {limit:data.status==='failed'?quotaInfo(data.error??output,response.headers):undefined,...cacheUsage(data.usage),runId:data.id??request.sessionId,status:data.status==='failed'?'failed':'completed',output,model:data.model??request.model??'hermes-agent',inputTokens:data.usage?.input_tokens??0,outputTokens:data.usage?.output_tokens??0}
       }
+      let runId=request.resumeRunId
+      if(!runId){
       const created = await fetcher(`${endpoint.url}/v1/runs`, {
         method: 'POST',
+        signal:AbortSignal.timeout(timeoutMs),
         headers: { ...headers, 'Idempotency-Key': idempotencyKey },
         body: JSON.stringify({
           input: request.input,
@@ -65,27 +83,31 @@ export function createHermesClient(options: { pollMs?: number; timeoutMs?: numbe
           ...(request.reasoningEffort ? { model_options: { reasoning_effort: request.reasoningEffort } } : {}),
         }),
       })
-      if (!created.ok) throw new HermesError(`Hermes menolak run: HTTP ${created.status} ${(await created.text()).slice(0, 300)}`, created.status === 429)
-      const { run_id: runId } = await created.json() as { run_id: string }
+      if (!created.ok)await httpFailure(created)
+      runId=(await created.json() as {run_id:string}).run_id
+      if(!runId)throw new HermesError('Hermes tidak memberikan run_id.',false)
+      await request.onRunCreated?.(runId)
+      }
       const deadline = Date.now() + timeoutMs
       while (Date.now() < deadline) {
         await sleep(pollMs)
-        const polled = await fetcher(`${endpoint.url}/v1/runs/${encodeURIComponent(runId)}`, { headers })
-        if (!polled.ok) continue
-        const run = await polled.json() as { status: string; output?: string; model?: string; usage?: HermesUsage }
+        const polled = await fetcher(`${endpoint.url}/v1/runs/${encodeURIComponent(runId)}`, { headers,signal:AbortSignal.timeout(Math.min(timeoutMs,30000)) })
+        if(polled.status===404)return {runId,status:'failed',output:'Hermes tidak lagi menyimpan run ini; tahap perlu dicoba ulang.',model:request.model??'hermes-agent',inputTokens:0,outputTokens:0}
+        if (!polled.ok){if(polled.status===429||polled.status===401||polled.status===403)await httpFailure(polled);continue}
+        const run = await polled.json() as { status: string; output?: string; model?: string; usage?: HermesUsage;error?:unknown }
         if (!TERMINAL.has(run.status)) continue
         return {
+          limit:run.status==='failed'?quotaInfo(run.error??run.output,polled.headers):undefined,
           ...cacheUsage(run.usage),
           runId,
           status: run.status as RunResult['status'],
-          output: run.output ?? '',
+          output: run.output ?? (typeof run.error==='string'?run.error:run.error?JSON.stringify(run.error):''),
           model: run.model ?? 'hermes-agent',
           inputTokens: run.usage?.input_tokens ?? 0,
           outputTokens: run.usage?.output_tokens ?? 0,
         }
       }
-      await fetcher(`${endpoint.url}/v1/runs/${encodeURIComponent(runId)}/stop`, { method: 'POST', headers }).catch(() => undefined)
-      throw new HermesError(`Run ${runId} melewati batas waktu ${Math.round(timeoutMs / 60000)} menit dan dihentikan.`, false)
+      throw new HermesError(`Run ${runId} melewati batas waktu ${Math.round(timeoutMs / 60000)} menit; run tersimpan untuk diperiksa ulang.`, false)
     },
   }
 }

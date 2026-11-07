@@ -96,7 +96,12 @@ export function Office() {
   return <div className={`blueprint-office workspace-${workspaceTab}${picked && wide ? ' agent-workspace-open' : ''}${expanded ? ' office-expanded' : ''}`} onKeyDown={event=>{if(event.key==='Escape'){setLiftOpen(false);setExpanded(false)}}}>
     {brands.map((brand) => <LiveBrand key={brand.id} id={brand.id} reload={() => void reload()}/>)}
     <div className="office-heading"><div><h1>Kantor virtual</h1><p>Ruang kerja tim AI OTCA. Pantau pekerjaan, tinjau hasil, dan berikan arahan.</p></div><div className="office-heading-actions"><button className="primary-button" onClick={()=>setCreating(true)}>Beri tugas</button><button className="office-expand" aria-pressed={expanded} onClick={()=>setExpanded(!expanded)}>{expanded ? 'Kembali ke tampilan biasa' : 'Perbesar kantor'}</button></div></div>
-    <section className="office-summary" aria-label="Ringkasan semua kantor"><div><span>Semua kantor</span><strong>{brands.length} brand</strong></div><div><span>Agent aktif</span><strong>{crew.length}<small>terdaftar</small></strong></div><div><span>Antre: </span><strong>{brands.every(b=>b.summary) ? totals.queued : '—'}<small>tugas</small></strong></div><a href="#/approval"><span>Approval terbuka: </span><strong>{brands.every(b=>b.summary) ? totals.approvals : '—'}<small>perlu ditinjau</small></strong></a><div><span>Menunggu kuota: </span><strong>{brands.every(b=>b.summary) ? totals.waitingQuota : '—'}<small>agent</small></strong></div></section>
+    <section className="office-summary" aria-label="Ringkasan semua kantor">
+      <div className="office-stat"><span className="office-stat-label"><StatIcon kind="agents"/>Agent aktif</span><strong>{crew.length}<small>terdaftar</small></strong></div>
+      <div className="office-stat"><span className="office-stat-label"><StatIcon kind="queue"/>Antre</span><strong>{brands.every(b=>b.summary) ? totals.queued : '—'}<small>tugas</small></strong></div>
+      <a className="office-stat office-stat-link" href="#/approval"><span className="office-stat-label"><StatIcon kind="review"/>Approval terbuka</span><strong>{brands.every(b=>b.summary) ? totals.approvals : '—'}<small>perlu ditinjau</small></strong></a>
+      <div className="office-stat"><span className="office-stat-label"><StatIcon kind="quota"/>Menunggu kuota</span><strong>{brands.every(b=>b.summary) ? totals.waitingQuota : '—'}<small>agent</small></strong></div>
+    </section>
     <div className="office-mobile-switch" role="group" aria-label="Area kerja"><button aria-pressed={workspaceTab==='team'} onClick={()=>setWorkspaceTab('team')}>Tim</button><button aria-pressed={workspaceTab==='scene'} onClick={()=>setWorkspaceTab('scene')}>Kantor 3D</button></div>
     <div className="office-workspace"><section className="office-view" aria-label="Tampilan kantor"><div className="office-view-heading"><div><h2>{current.brand?.name ?? 'Ruang bersama'}</h2><span>{current.index===0 ? 'Fasilitas dan area luar' : 'Lantai '+current.index+' · '+visible.length+' agent'}</span></div></div>
     <header className="blueprint-office-bar">
@@ -142,4 +147,9 @@ export function Office() {
     {created && <TaskDetailDialog key={created.id} task={created} brandName={brands.find(b=>b.id===created.brandId)?.name ?? created.brandId} onClose={()=>setCreated(undefined)} onChanged={()=>void reload()}/>}
 
   </div>
+}
+
+function StatIcon({kind}:{kind:'agents'|'queue'|'review'|'quota'}){
+  const paths={agents:'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M16 3a4 4 0 0 1 0 8m6 10v-2a4 4 0 0 0-3-3.87M13 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0',queue:'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01',review:'M9 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-4M9 12l3 3L22 4',quota:'M12 8v4l3 2M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0'}
+  return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={paths[kind]}/></svg>
 }

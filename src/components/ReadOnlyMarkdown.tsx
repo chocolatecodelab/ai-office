@@ -1,3 +1,4 @@
+import { PaginatedItems } from './PaginatedItems.tsx'
 import { createElement, type ReactNode } from 'react'
 import { lexer, type MarkedToken, type Token } from 'marked'
 
@@ -23,7 +24,7 @@ function content(tokens:Token[]):ReactNode {
       case 'link': return /^https?:\/\//i.test(token.href) ? <a key={key} href={token.href} target="_blank" rel="noopener noreferrer">{content(token.tokens)}</a> : <span key={key}>{content(token.tokens)}</span>
       case 'blockquote': return <blockquote key={key}>{content(token.tokens)}</blockquote>
       case 'list': return createElement(token.ordered?'ol':'ul',{key,...(token.ordered?{start:token.start || 1}:{})},token.items.map((item,i)=><li key={i}>{item.task && <span>{item.checked?'[x] ':'[ ] '}</span>}{content(item.tokens)}</li>))
-      case 'table': return <div className="markdown-table" key={key}><table><thead><tr>{token.header.map((cell,i)=><th key={i}>{content(cell.tokens)}</th>)}</tr></thead><tbody>{token.rows.map((row,i)=><tr key={i}>{row.map((cell,j)=><td key={j}>{content(cell.tokens)}</td>)}</tr>)}</tbody></table></div>
+      case 'table': return <PaginatedItems key={key} items={token.rows} scope={JSON.stringify(token.header)} label="baris">{rows=><div className="markdown-table"><table><thead><tr>{token.header.map((cell,i)=><th key={i}>{content(cell.tokens)}</th>)}</tr></thead><tbody>{rows.map((row,i)=><tr key={i}>{row.map((cell,j)=><td key={j}>{content(cell.tokens)}</td>)}</tr>)}</tbody></table></div>}</PaginatedItems>
       default: return <span key={key}>{raw.raw}</span>
     }
   })

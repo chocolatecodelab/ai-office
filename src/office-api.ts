@@ -12,7 +12,7 @@ export interface OfficeTask {
   priority: number; urgent: boolean; complex: boolean; status: TaskStatus; attempts: number
   result: string | null; error: string | null; retryAt: string | null; createdAt: string; updatedAt: string
   /** Chat replies only: the reply without its file blocks, and the files it carried. */
-  text?: string; artifacts?: Array<{ name: string; content: string; assetId?: string; mime?: string }>
+  text?: string; artifacts?: Array<{ name: string; content: string; assetId?: string; mime?: string;size?:number }>
 }
 
 export interface OfficeAgent { brandId: string; agentType: string; active: boolean; paused: boolean; status: AgentStatus; currentTask: string | null; retryAt?: string | null }
@@ -23,6 +23,7 @@ export interface ContentQc { scope:'text-only'; checks:Array<{label:string;statu
 export interface TaskUsageView { runs: number; inputTokens: number; outputTokens: number; durationMs: number | null; source: 'codex' | 'litellm'; model: string }
 
 export interface OfficeApproval {
+  review?:{title:string;kind:string;slides:number;status?:string;revision?:boolean}
   usage?: TaskUsageView | null
   qc?: ContentQc
   id: string; taskId: string; brandId: string; approvalType: string; approver: string
@@ -43,8 +44,8 @@ export interface OfficeIntegrations {
   encryptionReady: boolean
   services: Array<{
     service: string; label: string; purpose: string; level: string; auth: 'oauth' | 'api-key'; vars: string[]; file: string; howTo: string
-    adapterReady: boolean; connected: boolean; missing: string[]; oneClick: boolean; modeOptions: IntegrationMode[]
-    modes: Record<string, { requested: IntegrationMode; effective: IntegrationMode; account?: { email: string; status: 'active' | 'needs_reauth'; connectedAt: string } }>
+    adapterReady: boolean; connected: boolean; missing: string[]; oneClick: boolean; perBrand?:boolean;modeOptions: IntegrationMode[]
+    modes: Record<string, { requested: IntegrationMode; effective: IntegrationMode;ready?:boolean;missing?:string[];account?: { email: string; status: 'active' | 'needs_reauth'; connectedAt: string } }>
   }>
 }
 export interface OfficeStatus { integrations: IntegrationStatus[] }

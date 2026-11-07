@@ -1,3 +1,4 @@
+import { PaginatedItems } from '../components/PaginatedItems.tsx'
 import { useState } from 'react'
 import { formatDateTime } from '../format.ts'
 import { AGENT_NAMES, TASK_STATUS_LABELS, officeRequest, type OfficeBrand, type OfficeTask, type TaskStatus } from '../office-api.ts'
@@ -65,9 +66,9 @@ export function TaskBoard() {
       return <section className="column" key={column.title} aria-label={column.title}>
         <div className="column-head"><p className="eyebrow">{column.title}</p><span className="column-count">{items.length}</span></div>
         {items.length === 0 && <p className="column-empty">Kosong</p>}
-        {items.map((task) => <article className="task task-card" key={task.id}>
-          <button className="task-open" onClick={()=>setSelected(task)}>{task.title}</button>
-          <p className="task-meta">{task.brandName} · {AGENT_NAMES[task.agentType] ?? task.agentType}{task.kind ? ` · ${task.kind}` : ''}</p>
+        <PaginatedItems items={items} scope={brandId} label="tugas">{rows=><>{rows.map((task) => <article className="task task-card" key={task.id}>
+          <button className="task-open" title={task.title} onClick={()=>setSelected(task)}>{task.title}</button>
+          <p className="task-meta">{task.brandName}<br/>{AGENT_NAMES[task.agentType] ?? task.agentType}</p>
           <p className="task-meta">{TASK_STATUS_LABELS[task.status]} · percobaan {task.attempts}{task.retryAt ? ` · coba lagi ${formatDateTime(task.retryAt)}` : ''}</p>
           {task.error && <p className="task-text text-bad">{task.error}</p>}
           <p className="task-meta">Diperbarui {formatDateTime(task.updatedAt)}</p>
@@ -76,7 +77,7 @@ export function TaskBoard() {
             {CANCELLABLE.includes(task.status) && <button type="button" className="refresh-button" disabled={busy === task.id} onClick={() => void act(task, 'cancel')}>Batalkan</button>}
             {task.status === 'failed' && <button type="button" className="refresh-button" disabled={busy === task.id} onClick={() => void act(task, 'retry')}>Coba ulang</button>}
           </div>
-        </article>)}
+        </article>)}</>}</PaginatedItems>
       </section>
     })}</div>
     {creating && brands.status==='ready' && <TaskComposer brands={brands.data} initialBrand={brandId} onClose={()=>setCreating(false)} onCreated={task=>{setCreating(false);tasks.refresh();setSelected(task);setNotice('Tugas berhasil dikirim ke antrean.')}}/>}

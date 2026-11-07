@@ -1,3 +1,4 @@
+import { PaginatedItems } from './PaginatedItems.tsx'
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { formatDateTime } from '../format.ts'
 import { officeRequest, type AgentNote, type NoteKind } from '../office-api.ts'
@@ -84,8 +85,8 @@ export function AgentNotes({ brandId, agentType, agentName }: { brandId: string;
 
     {mine.length>0 && <label className="notes-field">Cari catatan dan memori<input type="search" value={search} onChange={e=>setSearch(e.target.value)} placeholder="Judul atau isi catatan…"/></label>}
     {mine.length>0 && sorted.length===0 && <p>Tidak ada catatan yang sesuai pencarian.</p>}
-    <ul className="notes-list">
-      {sorted.map((note) => <li key={note.id} className={note.active ? undefined : 'off'}>
+    <PaginatedItems items={sorted} scope={brandId+"/"+agentType+"/"+search} label="catatan">{rows=><ul className="notes-list">
+      {rows.map((note) => <li key={note.id} className={note.active ? undefined : 'off'}>
         <div className="notes-row-head">
           <span className={`notes-badge notes-${note.kind}`}>{KIND_LABELS[note.kind]}</span>
           {note.agentType === null && <span className="notes-badge notes-shared" title="Dimuat oleh semua agent di brand ini">Semua agent</span>}
@@ -106,6 +107,6 @@ export function AgentNotes({ brandId, agentType, agentName }: { brandId: string;
           </span>
         </div>
       </li>)}
-    </ul>
+    </ul>}</PaginatedItems>
   </section>
 }

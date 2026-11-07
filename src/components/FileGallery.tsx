@@ -22,9 +22,10 @@ export function FolderCard({ title, count, note, onOpen }: { title: string; coun
 export function FileCard({ asset, showBrand, latest, selected, onOpen }: { asset: AssetItem; showBrand: boolean; latest: boolean; selected: boolean; onOpen: () => void }) {
   const kind = fileKind(asset)
   const thumb = thumbText(asset)
+  const [imageFailed,setImageFailed]=useState(false)
   return <button type="button" className="fb-card" aria-pressed={selected} onClick={onOpen}>
     <span className={`fb-thumb fb-thumb-${kind}`} aria-hidden="true">
-      {thumb ? <span className="fb-thumb-text">{thumb}</span> : <span className="fb-thumb-empty">{KIND_LABELS[kind]}</span>}
+      {kind==='image'&&asset.downloadable ? imageFailed?<span className="fb-thumb-empty">Pratinjau tidak tersedia</span>:<img className="fb-thumbnail-image" src={`/api/office/brands/${encodeURIComponent(asset.brandId)}/assets/${encodeURIComponent(asset.id)}/file?inline=1`} alt="" loading="lazy" decoding="async" onError={()=>setImageFailed(true)}/> : thumb ? <span className="fb-thumb-text">{thumb}</span> : <span className="fb-thumb-empty">{KIND_LABELS[kind]}</span>}
     </span>
     <span className="fb-card-info">
       <KindIcon kind={kind}/>
@@ -43,16 +44,18 @@ interface Loaded { content?: string; preview?: AssetPreview; error?: string }
 export function PreviewDialog({ asset, onClose, onChanged }: { asset: AssetItem; onClose: () => void; onChanged: () => void }) {
   const [loaded, setLoaded] = useState<Loaded>({})
   const [copied, setCopied] = useState(false)
+  const [imageFailed,setImageFailed]=useState(false)
   const [size, setSize] = useState(asset.size)
   const [rerender, setRerender] = useState<{ busy: boolean; note?: string; failed?: boolean }>({ busy: false })
   useEffect(() => {
+    if(asset.mime==='image/png')return
     let current = true
     const base = `/brands/${asset.brandId}/assets/${asset.id}`
     Promise.all([officeRequest<{ content: string }>('GET', base), officeRequest<AssetPreview>('GET', `${base}/preview`)])
       .then(([full, preview]) => { if (current) setLoaded({ content: full.content, preview }) })
       .catch((failure) => { if (current) setLoaded({ error: failure instanceof Error ? failure.message : String(failure) }) })
     return () => { current = false }
-  }, [asset.brandId, asset.id])
+  }, [asset.brandId, asset.id, asset.mime])
 
   const content = loaded.content
   const printAgain = async () => {
@@ -81,14 +84,14 @@ export function PreviewDialog({ asset, onClose, onChanged }: { asset: AssetItem;
     </header>
     <div className="fb-actions">
       {asset.downloadable
-        ? <a className="refresh-button" href={`/api/office/brands/${asset.brandId}/assets/${asset.id}/file`} download={fileName(asset)}>Unduh PDF</a>
+        ? <a className="refresh-button" href={`/api/office/brands/${asset.brandId}/assets/${asset.id}/file`} download={fileName(asset)}>Unduh berkas</a>
         : <button type="button" className="refresh-button" disabled={content === undefined} onClick={() => content !== undefined && downloadText(fileName(asset), content, 'text/markdown;charset=utf-8')}>Unduh</button>}
-      <button type="button" className="refresh-button" disabled={content === undefined} onClick={() => void copy()}>{copied ? 'Tersalin' : 'Salin isi'}</button>
-      {asset.downloadable && <button type="button" className="refresh-button" disabled={rerender.busy} title="Mencetak ulang dari Markdown tersimpan dengan templat terbaru" onClick={() => void printAgain()}>{rerender.busy ? 'Mencetak…' : 'Buat ulang PDF'}</button>}
+      {asset.mime!=='image/png'&&<button type="button" className="refresh-button" disabled={content === undefined} onClick={() => void copy()}>{copied ? 'Tersalin' : 'Salin isi'}</button>}
+      {asset.downloadable && asset.mime==='application/pdf' && <button type="button" className="refresh-button" disabled={rerender.busy} title="Mencetak ulang dari Markdown tersimpan dengan templat terbaru" onClick={() => void printAgain()}>{rerender.busy ? 'Mencetak…' : 'Buat ulang PDF'}</button>}
     </div>
     {rerender.note && <p className={rerender.failed ? 'form-error' : 'small-note'} role={rerender.failed ? 'alert' : 'status'}>{rerender.note}</p>}
     <div className="fb-stage">
-      {loaded.error ? <p className="form-error" role="alert">{loaded.error}</p>
+      {asset.mime==='image/png' ? imageFailed?<p role="alert">Gambar tidak dapat dimuat. Anda tetap dapat mencoba mengunduh berkas.</p>:<img className="agent-produced-image" src={`/api/office/brands/${asset.brandId}/assets/${asset.id}/file?inline=1`} alt={assetLabel(asset)} onError={()=>setImageFailed(true)}/> : loaded.error ? <p className="form-error" role="alert">{loaded.error}</p>
         : !preview ? <p className="muted">Memuat isi…</p>
         : preview.type === 'text' ? <pre className="fb-content">{preview.text}</pre>
         : <iframe className="fb-page" title={`Pratinjau ${assetLabel(asset)}`} sandbox="" referrerPolicy="no-referrer" srcDoc={preview.html}/>}

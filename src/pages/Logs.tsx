@@ -1,3 +1,4 @@
+import { PaginatedItems } from '../components/PaginatedItems.tsx'
 import { formatDateTime } from '../format.ts'
 import { AGENT_NAMES, type HealthCheck, type OfficeTask } from '../office-api.ts'
 import { usePolling } from '../polling.ts'
@@ -26,10 +27,10 @@ export function Logs() {
     </section>
     <section className="card settings-card" aria-labelledby="logs-failed">
       <div className="settings-head"><div><p className="eyebrow">TUGAS</p><h2 id="logs-failed">Tugas gagal</h2></div></div>
-      {tasks.status === 'pending' ? <p className="muted">Memuat tugas…</p> : tasks.status==='failed' ? <p role="alert">Daftar tugas belum dapat dimuat. <button className="refresh-button" onClick={tasks.refresh}>Coba lagi</button></p> : failed.length === 0 ? <div className="system-empty"><strong>Tidak ada tugas gagal</strong><p>Tugas yang mengalami kendala akan muncul di sini untuk ditinjau.</p></div> : <ul className="failed-task-list">{failed.map((task) => <li key={task.id}>
+      {tasks.status === 'pending' ? <p className="muted">Memuat tugas…</p> : tasks.status==='failed' ? <p role="alert">Daftar tugas belum dapat dimuat. <button className="refresh-button" onClick={tasks.refresh}>Coba lagi</button></p> : failed.length === 0 ? <div className="system-empty"><strong>Tidak ada tugas gagal</strong><p>Tugas yang mengalami kendala akan muncul di sini untuk ditinjau.</p></div> : <PaginatedItems items={failed} label="tugas gagal">{rows=><ul className="failed-task-list">{rows.map((task) => <li key={task.id}>
         <button className="task-open" onClick={()=>setSelected(task)}>{task.title}</button><p>{task.brandName} · {AGENT_NAMES[task.agentType] ?? task.agentType} · {formatDateTime(task.updatedAt)} · percobaan {task.attempts}</p>
         {task.error && <div className="text-bad">{task.error}</div>}
-      </li>)}</ul>}
+      </li>)}</ul>}</PaginatedItems>}
     </section>
     {selected && <TaskDetailDialog key={selected.id} task={selected} brandName={selected.brandName} onClose={()=>setSelected(undefined)} onChanged={tasks.refresh}/>}
   </div>

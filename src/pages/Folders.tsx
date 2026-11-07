@@ -8,7 +8,6 @@ import { usePolling } from '../polling.ts'
 import { EmptyState, LoadingState, PageTitle, SearchInput } from '../ui.tsx'
 
 type View = 'grid' | 'list'
-const RECENT = 8
 
 function savedView(): View {
   try { return localStorage.getItem('folders-view') === 'list' ? 'list' : 'grid' } catch { return 'grid' }
@@ -22,12 +21,14 @@ export function Folders() {
   const [filters, setFilters] = useState<Filters>(NO_FILTERS)
   const [selected, setSelected] = useState<AssetItem>()
   const [view, setView] = useState<View>(savedView)
+  const [page,setPage]=useState(1)
+  const [pageSize,setPageSize]=useState(24)
   if (data.status === 'pending') return <><PageTitle eyebrow="FOLDERS" title="Folders"/><LoadingState message="Memuat hasil kerja..."/></>
   if (data.status === 'failed') return <><PageTitle eyebrow="FOLDERS" title="Folders"/><EmptyState title="Tidak tersedia">Hasil kerja belum dapat dimuat. {data.message}</EmptyState></>
 
-  const { assets, drive } = data.data
+  const { assets } = data.data
   const now = Date.now()
-  const set = (patch: Partial<Filters>) => setFilters((current) => ({ ...current, ...patch }))
+  const set = (patch: Partial<Filters>) => {setPage(1);setFilters((current) => ({ ...current, ...patch }))}
   const chooseView = (next: View) => { setView(next); try { localStorage.setItem('folders-view', next) } catch { /* the choice just is not remembered */ } }
 
   const brands = [...new Map(assets.map((asset) => [asset.brandId, asset.brandName])).entries()].sort(([a], [b]) => FLOOR_ORDER.indexOf(a) - FLOOR_ORDER.indexOf(b))
@@ -50,14 +51,15 @@ export function Folders() {
   }
   const withoutKind = filterAssets(assets, filters, now, 'kind')
   const matches = filterAssets(assets, filters, now)
-  // At the top level only the latest few files are shown; inside a folder, all of them.
-  const atRoot = !searching && filters.brand === 'all'
-  const files = atRoot ? matches.slice(0, RECENT) : matches
+  const pages=Math.max(1,Math.ceil(matches.length/pageSize))
+  const currentPage=Math.min(page,pages)
+  const start=(currentPage-1)*pageSize
+  const files = matches.slice(start,start+pageSize)
   const brandName = brands.find(([id]) => id === filters.brand)?.[1]
-  const reset = () => setFilters({ ...NO_FILTERS, sort: filters.sort })
+  const reset = () => {setPage(1);setFilters({ ...NO_FILTERS, sort: filters.sort })}
 
   return <>
-    <PageTitle eyebrow="FOLDERS" title="Folders">Hasil kerja agent per brand, tersimpan sebagai versi berurutan. Mockup: Google Drive belum disambungkan{drive ? ` (mode ${drive.mode})` : ''}.</PageTitle>
+    <PageTitle eyebrow="FOLDERS" title="Folders">Temukan hasil kerja agent, lihat pratinjau, dan unduh berkas per brand.</PageTitle>
     {assets.length === 0 ? <EmptyState title="Belum ada hasil">Hasil muncul setelah agent menyelesaikan tugas.</EmptyState> : <div className="fb">
       <div className="fb-bar">
         <nav className="fb-crumbs" aria-label="Lokasi folder">
@@ -77,7 +79,7 @@ export function Folders() {
         <div className="fb-controls">
           <label>Periode <select value={filters.period} onChange={(event) => set({ period: event.target.value as Period })}>{(Object.keys(PERIOD_LABELS) as Period[]).map((period) => <option key={period} value={period}>{PERIOD_LABELS[period]}</option>)}</select></label>
           <label>Urutkan <select value={filters.sort} onChange={(event) => set({ sort: event.target.value as SortKey })}>{(Object.keys(SORT_LABELS) as SortKey[]).map((sort) => <option key={sort} value={sort}>{SORT_LABELS[sort]}</option>)}</select></label>
-          {(searching || filters.brand !== 'all') && <button type="button" className="refresh-button" onClick={() => setFilters({ ...NO_FILTERS, sort: filters.sort })}>Reset</button>}
+          {(searching || filters.brand !== 'all') && <button type="button" className="refresh-button" onClick={reset}>Reset</button>}
           <div className="fb-views" role="group" aria-label="Tampilan">
             <button type="button" aria-pressed={view === 'grid'} onClick={() => chooseView('grid')}>Kartu</button>
             <button type="button" aria-pressed={view === 'list'} onClick={() => chooseView('list')}>Daftar</button>
@@ -91,10 +93,11 @@ export function Folders() {
       </section>}
 
       <section aria-label="Berkas">
-        <h2 className="fb-heading">{atRoot ? 'Terbaru' : searching ? 'Hasil pencarian' : 'Berkas'} <small role="status">{atRoot ? `${files.length} dari ${assets.length}` : `${files.length} berkas`}</small></h2>
+        <h2 className="fb-heading">{searching ? 'Hasil pencarian' : 'Semua berkas'} <small role="status">{matches.length?`${start+1}–${start+files.length} dari ${matches.length} berkas`:'0 berkas'}</small></h2>
         {files.length === 0
           ? <p className="fb-empty">{searching ? 'Tidak ada berkas yang cocok.' : 'Folder ini belum berisi berkas.'}{searching && <> <button type="button" className="refresh-button" onClick={reset}>Reset filter</button></>}</p>
           : <div className={`fb-grid${view === 'list' ? ' list' : ''}`}>{files.map((asset) => <FileCard key={asset.id} asset={asset} showBrand={filters.brand === 'all'} latest={latest.get(asset.taskId) === asset.version} selected={selected?.id === asset.id} onOpen={() => setSelected(asset)}/>)}</div>}
+        {matches.length>0&&<nav className="fb-pagination" aria-label="Halaman berkas"><label>Berkas per halaman<select value={pageSize} onChange={e=>{setPageSize(Number(e.target.value));setPage(1)}}>{[12,24,48].map(n=><option key={n} value={n}>{n}</option>)}</select></label><div><button type="button" className="refresh-button" disabled={currentPage===1} onClick={()=>setPage(currentPage-1)}>Sebelumnya</button><span aria-live="polite">Halaman {currentPage} dari {pages}</span><button type="button" className="refresh-button" disabled={currentPage===pages} onClick={()=>setPage(currentPage+1)}>Berikutnya</button></div></nav>}
       </section>
     </div>}
     {selected && <PreviewDialog key={selected.id} asset={selected} onClose={() => setSelected(undefined)} onChanged={data.refresh}/>}

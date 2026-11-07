@@ -9,6 +9,7 @@ import { installProfileLock, isHidden, type Privacy } from './profile-lock.js'
 import { API_VERSION } from './api-version.js'
 import { claudeService, CLAUDE_AGENTS } from './claude-service.js'
 import { attachOfficeSocket, officeRouter, startOffice } from './office/index.js'
+import { publicationMediaRouter } from './office/publication-media.js'
 
 const HOST = '127.0.0.1'
 const PORT = Number(process.env.RUANG_PORT ?? process.env.MISSION_CONTROL_PORT) || 3001
@@ -356,6 +357,7 @@ app.get('/api/folders/:profile/file', folderRoute(async (request) => {
 const office = startOffice()
 office.catch((error: unknown) => console.error('Office API tidak aktif:', error instanceof Error ? error.message : error))
 app.use('/api/office', officeRouter(office))
+app.use('/publication-media',publicationMediaRouter(office))
 
 app.use('/api', (_request, response) => { response.status(404).json({ error: 'Not found' }) })
 

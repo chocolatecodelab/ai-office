@@ -1,3 +1,4 @@
+import { memoryCommand } from './chat-memory-command.js'
 import { classifyCommentFiles } from './social-community.js'
 import { cachedDocumentContext } from './document-context-cache.js'
 import { searchDocuments, profileCsv } from './document-tools.js'
@@ -12,7 +13,7 @@ import { validateMemoryChoices, type MemoryChoices } from './memory-choices.js'
 
 export interface ChatAttachment {id:string;name:string;mime:string;size:number;warning:string;source:string;createdAt:string}
 export interface ChatMemory {enabled:boolean;automatic:boolean;summary:string;throughAt:string;revision:number;updatedAt:string}
-export interface ChatInput extends MemoryChoices {attachmentIds:string[];skills:string[];useMemory:boolean;pageRanges:Record<string,string>}
+export interface ChatInput extends MemoryChoices {attachmentIds:string[];skills:string[];useMemory:boolean;pageRanges:Record<string,string>;productionSourceTaskId?:string}
 const attachmentColumns='id,name,mime,size,warning,source,processing,created_at AS "createdAt"'
 export const words=(text:string)=>[...new Set(text.toLowerCase().normalize('NFKC').match(/[\p{L}\p{N}]{3,}/gu) ?? [])].filter(w=>!new Set(['yang','dan','untuk','dari','dengan','saya','kamu','anda','ini','itu','buat','tolong','the','and','atau','pada','dalam','adalah','bisa']).has(w))
 /** Rules remain mandatory. Memory selection uses explicit word overlap, not claimed semantic/vector search. */
@@ -22,11 +23,13 @@ export function relevantNotes(notes:AgentNote[],query:string,enabled=true,exclud
   return [...notes.filter(n=>n.active && n.kind==='rule'),...(enabled?scored.map(n=>n.note):[])]
 }
 export function validateChatInput(input:Record<string,unknown>,agent:string):ChatInput {
+  const productionSourceTaskId=input.productionSourceTaskId
+  if(productionSourceTaskId!==undefined&&productionSourceTaskId!==null&&(!['content-creator','video-editor'].includes(agent)||typeof productionSourceTaskId!=='string'||!/^[0-9a-f-]{36}$/i.test(productionSourceTaskId)))throw new Error('Pilih versi hasil yang valid untuk agent produksi.')
   const ids=input.attachmentIds ?? []
   if(!Array.isArray(ids) || ids.length>chatLimits().filesPerMessage || new Set(ids).size!==ids.length || ids.some(id=>typeof id!=='string' || !/^[0-9a-f-]{36}$/i.test(id)))throw new Error(`Pilih maksimal ${chatLimits().filesPerMessage} lampiran yang berbeda.`)
   const ranges=input.pageRanges??{}
   if(!ranges || typeof ranges!=='object'||Array.isArray(ranges)||Object.entries(ranges).some(([id,r])=>!ids.includes(id)||typeof r!=='string'||r.length>2000||!/^[0-9,\s-]*$/.test(r)))throw new Error('Rentang halaman tidak valid.')
-  return {...validateMemoryChoices(input),pageRanges:ranges as Record<string,string>,attachmentIds:ids as string[],skills:selectedSkills(agent,input.skills).map(s=>s.id),useMemory:input.useMemory!==false}
+  return {...validateMemoryChoices(input),pageRanges:ranges as Record<string,string>,attachmentIds:ids as string[],skills:selectedSkills(agent,input.skills).map(s=>s.id),useMemory:input.useMemory!==false,...(productionSourceTaskId?{productionSourceTaskId:productionSourceTaskId as string}:{})}
 }
 export class ChatWorkspace {
   constructor(readonly store:OfficeStore){}
@@ -35,14 +38,14 @@ export class ChatWorkspace {
     const file=await readAttachment(name,data)
     return transaction(this.store.db,async tx=>{
       await tx.query('SELECT agent_type FROM agents WHERE brand_id=$1 AND agent_type=$2 FOR UPDATE',[brand,agent])
-      const count=(await tx.query('SELECT count(*)::int AS n,coalesce(sum(size),0)::bigint AS bytes FROM chat_attachments WHERE brand_id=$1 AND agent_type=$2 AND NOT removed',[brand,agent])).rows[0]
+      const count=(await tx.query("SELECT count(*)::int AS n,coalesce(sum(size) FILTER (WHERE mime NOT LIKE 'video/%'),0)::bigint AS bytes FROM chat_attachments WHERE brand_id=$1 AND agent_type=$2 AND NOT removed",[brand,agent])).rows[0]
       if(count.n>=chatLimits().libraryFiles || Number(count.bytes)+file.data.length>chatLimits().libraryBytes)throw new Error('Kapasitas pustaka sesuai konfigurasi server telah tercapai. Hapus berkas yang tidak dibutuhkan atau naikkan kapasitas server.')
       const saved=(await tx.query(`INSERT INTO chat_attachments (brand_id,agent_type,name,mime,size,data,extracted,warning,source) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING ${attachmentColumns}`,[brand,agent,file.name,file.mime,file.data.length,file.data,file.extracted,file.warning,source])).rows[0] as ChatAttachment
       await audit(tx,{actor:'pengguna-lokal',action:'chat.attachment.add',objectType:'chat-attachment',objectId:saved.id,brandId:brand,after:{name:file.name,source}})
       return saved
     })
   }
-  async attachment(brand:string,agent:string,id:string) {return (await this.store.db.query('SELECT * FROM chat_attachments WHERE brand_id=$1 AND agent_type=$2 AND id::text=$3 AND NOT removed',[brand,agent,id])).rows[0] as {id:string;name:string;mime:string;data:Buffer;extracted:string;warning:string;source:string}|undefined}
+  async attachment(brand:string,agent:string,id:string) {return (await this.store.db.query('SELECT * FROM chat_attachments WHERE brand_id=$1 AND agent_type=$2 AND id::text=$3 AND NOT removed',[brand,agent,id])).rows[0] as {id:string;name:string;mime:string;data:Buffer;extracted:string;warning:string;source:string;agent_type:string}|undefined}
   async taskAttachment(task:Task,id:string) {
     const row=(await this.store.db.query(`SELECT a.* FROM chat_attachments a WHERE a.brand_id=$1 AND a.id::text=$2 AND NOT a.removed AND (a.agent_type=$3 OR EXISTS(SELECT 1 FROM tasks p JOIN chat_inputs i ON i.task_id=p.id AND i.brand_id=p.brand_id WHERE p.id=$4 AND p.brand_id=$1 AND p.agent_type=a.agent_type AND a.id=ANY(i.attachment_ids)))`,[task.brandId,id,task.agentType,task.parentId])).rows[0]
     return row as Awaited<ReturnType<ChatWorkspace['attachment']>>
@@ -59,7 +62,17 @@ export class ChatWorkspace {
   }
   async createChat(brand:string,agent:string,message:string,input:Record<string,unknown>,newTask?:NewTask) {
     const options=validateChatInput(input,agent)
+    let continuation:{brief:string;attachmentIds:string[]}|undefined
+    if(!newTask&&agent==='content-creator'&&!/\b(jangan|batal|batalkan|topik baru)\b/i.test(message)&&/\b(latar|slide|foto|background|referensi|cover|utama|tutor|gunakan|gambar|lanjut)\b/i.test(message)){
+      const previous=(await this.store.db.query("SELECT id FROM tasks WHERE brand_id=$1 AND agent_type=$2 AND kind='konten.chat' ORDER BY created_at DESC LIMIT 1",[brand,agent])).rows[0]
+      if(previous)continuation=(await this.store.db.query("SELECT payload FROM task_events WHERE brand_id=$1 AND task_id=$2 AND type='carousel_clarification' ORDER BY id DESC LIMIT 1",[brand,previous.id])).rows[0]?.payload
+      if(continuation&&!options.attachmentIds.length)options.attachmentIds=continuation.attachmentIds
+    }
     return transaction(this.store.db,async tx=>{
+      if(options.productionSourceTaskId){
+        const source=(await tx.query("SELECT j.task_id FROM production_jobs j JOIN tasks t ON t.id=j.task_id AND t.brand_id=j.brand_id WHERE j.brand_id=$1 AND j.agent_type=$2 AND j.task_id=$3 AND EXISTS(SELECT 1 FROM assets a WHERE a.brand_id=j.brand_id AND a.task_id=j.task_id AND a.storage_key IS NOT NULL AND (($2='content-creator' AND a.name='slide-01.png') OR ($2='video-editor' AND (a.mime LIKE 'image/%' OR a.mime='video/mp4' OR a.name='storyboard-visual.html')))) FOR SHARE OF j",[brand,agent,options.productionSourceTaskId])).rows[0]
+        if(!source)throw new Error('Versi hasil belum siap atau bukan milik agent dan brand ini.')
+      }
       if(options.excludedMemoryIds.length){
         const valid=await tx.query("SELECT id FROM agent_notes WHERE brand_id=$1 AND (agent_type IS NULL OR agent_type=$2) AND kind='memory' AND active AND id=ANY($3::uuid[]) FOR SHARE",[brand,agent,options.excludedMemoryIds])
         if(valid.rows.length!==options.excludedMemoryIds.length)throw new Error('Memori yang dipilih sudah berubah atau tidak tersedia untuk agent ini. Atur ulang pilihan pesan ini.')
@@ -69,7 +82,19 @@ export class ChatWorkspace {
         if(valid.rows.length!==options.attachmentIds.length)throw new Error('Lampiran sudah dihapus atau bukan milik agent dan brand ini.')
       }
       const task=await this.store.createTask(brand,newTask??{agentType:agent,kind:'konten.chat',title:message.slice(0,100),brief:message,createdBy:'pengguna-lokal'},tx)
+      if(continuation)await this.store.logEvent(tx,task,'carousel_continuation',{brief:continuation.brief})
       await tx.query('INSERT INTO chat_inputs (task_id,brand_id,agent_type,attachment_ids,skills,use_memory,page_ranges,excluded_memory_ids,use_summary) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)',[task.id,brand,agent,options.attachmentIds,options.skills,options.useMemory,JSON.stringify(options.pageRanges),options.excludedMemoryIds,options.useSummary])
+      if(options.productionSourceTaskId)await tx.query('UPDATE chat_inputs SET production_source_task_id=$3 WHERE brand_id=$1 AND task_id=$2',[brand,task.id,options.productionSourceTaskId])
+      const remember=!newTask ? memoryCommand(message) : null
+      if(remember){
+        if(options.attachmentIds.length || options.skills.length)throw new Error('Untuk menyimpan memori, kirim teks perintah saja tanpa lampiran atau skill.')
+        const note=await this.store.addNote(brand,{kind:'memory',...remember,agentType:agent,active:true},'pengguna-lokal',tx)
+        await this.store.transition(brand,task.id,'running',{actor:'sistem',reason:'Perintah memori lokal'},tx)
+        const reply='Memori disimpan untuk agent ini di brand ini: '+remember.body+'\n\nAnda dapat mengedit atau menghapusnya di Memori & Rules. Aturan resmi tetap berlaku.'
+        await tx.query('INSERT INTO assets(task_id,brand_id,kind,version,content) VALUES($1,$2,$3,1,$4)',[task.id,brand,task.kind,reply])
+        await this.store.logEvent(tx,task,'chat_memory_saved',{noteId:note.id,source:'explicit-user-command'})
+        return this.store.transition(brand,task.id,'done',{actor:'sistem',reason:'Memori tersimpan tanpa panggilan model',patch:{result:reply,completed_at:new Date().toISOString()}},tx)
+      }
       return task
     })
   }
