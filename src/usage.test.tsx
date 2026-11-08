@@ -1,9 +1,15 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { TokenUsage } from './pages/TokenUsage.tsx'
-import { formatCost, sourceLabel } from './usage.ts'
+import { formatCost, formatRupiah, sourceLabel } from './usage.ts'
 
 describe('token usage view', () => {
+  it('converts estimates using the user supplied Rp18,168 rate without rounding USD first',()=>{
+    expect(formatRupiah(1).replace(/\s/g,'')).toBe('Rp18.168')
+    expect(formatRupiah(0.3758).replace(/\s/g,'')).toBe('Rp6.828')
+    expect(formatRupiah(0).replace(/\s/g,'')).toBe('Rp0')
+    expect(formatRupiah(undefined)).toBe('—')
+  })
   it('labels kinds of work and formats estimated costs', () => {
     expect(sourceLabel('kanban')).toBe('Kanban tasks')
     expect(sourceLabel('cron')).toBe('Cron jobs')
@@ -17,6 +23,6 @@ describe('token usage view', () => {
     const markup = renderToStaticMarkup(<TokenUsage/>)
     expect(markup).toContain('TOKEN USAGE · LAST 7 DAYS')
     for (const label of ['24H', '7D', '30D']) expect(markup).toContain(`>${label}<`)
-    expect(markup).toContain('Reading hermes insights for every agent')
+    expect(markup).toContain('Membaca data penggunaan token kru Claude')
   })
 })

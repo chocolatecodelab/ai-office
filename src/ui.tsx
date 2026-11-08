@@ -33,7 +33,7 @@ export function SourceStatus({ source, fetchedAt, request }: { source?: Source<u
 }
 
 export function Unavailable({ source, request }: { source?: Source<unknown>; request: Polled<unknown> }) {
-  if (request.status === 'failed') return <section className="empty-state" role="alert"><h2>Not Available</h2><p>{request.message ?? 'This read-only source could not be reached. Is the Ruang API running?'}</p></section>
+  if (request.status === 'failed') return <section className="empty-state" role="alert"><h2>Not Available</h2><p>{request.message ?? 'This read-only source could not be reached. Is the OTCA API running?'}</p></section>
   return source?.availability === 'unavailable' ? <section className="empty-state"><h2>Not Available</h2><p>{source.error?.message ?? 'This read-only source could not be read.'}</p></section> : null
 }
 

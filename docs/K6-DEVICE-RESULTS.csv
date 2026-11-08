@@ -1,0 +1,10 @@
+device,os,browser,build,network,scenario,quality,warmup_seconds,measurement_seconds,initial_transfer_bytes,min_window_fps,stable_fps,touch_controls,result,evidence
+,,,,,shared,auto,10,60,,,,,NOT_RUN,
+,,,,,shared,low,10,60,,,,,NOT_RUN,
+,,,,,shared,high,10,60,,,,,NOT_RUN,
+,,,,,otca,auto,10,60,,,,,NOT_RUN,
+,,,,,otca,low,10,60,,,,,NOT_RUN,
+,,,,,otca,high,10,60,,,,,NOT_RUN,
+,,,,,building,auto,10,60,,,,,NOT_RUN,
+,,,,,building,low,10,60,,,,,NOT_RUN,
+,,,,,building,high,10,60,,,,,NOT_RUN,

@@ -1,6 +1,8 @@
 const compact = new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 })
 const whole = new Intl.NumberFormat('en')
 
+import { knownAgentName } from './agent-directory.ts'
+
 export function formatCompact(value: number): string { return compact.format(value) }
 export function formatNumber(value: number): string { return whole.format(value) }
 
@@ -44,7 +46,8 @@ export function formatBytes(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`
 }
 
-/** Display name for an agent: its Hermes profile name as-is. */
+/** Display name for an agent. */
 export function agentLabel(profile: string | undefined): string {
-  return profile ?? 'Hermes'
+  if (!profile) return 'Claude'
+  return knownAgentName(profile) ?? profile
 }

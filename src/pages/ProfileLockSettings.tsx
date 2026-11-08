@@ -36,7 +36,7 @@ export function ProfileLockSettings() {
       {mode === 'agents' && <LockForm kind="agents" agents={agents} status={status} onDone={finish('Locked agents saved.')} onCancel={() => setMode('idle')}/>}
       {mode === 'pin' && <LockForm kind="pin" agents={agents} status={status} onDone={finish('New PIN saved. Every unlocked agent is locked again.')} onCancel={() => setMode('idle')}/>}
       {mode === 'off' && <LockForm kind="off" agents={agents} status={status} onDone={finish('Profile lock is off. Every agent is visible.')} onCancel={() => setMode('idle')}/>}
-      <p className="small-note">Lost the PIN? On the machine that runs Ruang, run <code>ruang profile-lock off</code>.</p>
+      <p className="small-note">Lost the PIN? On the machine that runs OTCA, run <code>ruang profile-lock off</code>.</p>
     </>}
   </section>
 }

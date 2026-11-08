@@ -12,6 +12,8 @@ describe('hash routing', () => {
     expect(pageFromHash('#/nope')).toBe('Office')
     expect(navigation).toContain('Logs')
     expect(pageFromHash('#/knowledge')).toBe('Memory')
+    expect(pageFromHash('#/event')).toBe('Office')
+    expect(navigation).not.toContain('Event')
     expect(pageFromHash('#/folders/coder')).toBe('Folders')
   })
 })

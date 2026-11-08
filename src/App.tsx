@@ -1,11 +1,19 @@
 import { useEffect, useRef, useState } from 'react'
 import { formatTime } from './format.ts'
+import { NavigationIcon } from './components/NavigationIcon.tsx'
+import './workspace.css'
+import './review.css'
+import './chat-layout.css'
+import './controls.css'
 import { Activity } from './pages/Activity.tsx'
 import { Agents } from './pages/Agents.tsx'
+import { Approvals } from './pages/Approvals.tsx'
+
+
 import { Calendar } from './pages/Calendar.tsx'
 import { Folders } from './pages/Folders.tsx'
 import { Logs } from './pages/Logs.tsx'
-import { Memory } from './pages/Memory.tsx'
+import { Memory } from './pages/ContextMemory.tsx'
 import { Office } from './pages/Office.tsx'
 import { Settings } from './pages/Settings.tsx'
 import { Usage } from './pages/Usage.tsx'
@@ -28,6 +36,8 @@ function Shell({ onRefresh, access, onAccessChange }: { onRefresh: () => void; a
   const { theme, toggleTheme } = usePreferences()
   // The navigation is a drawer over the page, closed by default, like a game's menu.
   const [menuOpen, setMenuOpen] = useState(false)
+  const [desktop,setDesktop]=useState(()=>Boolean(window.matchMedia?.('(min-width: 768px)').matches))
+  useEffect(()=>{const media=window.matchMedia?.('(min-width: 768px)');if(!media)return;const update=()=>setDesktop(media.matches);media.addEventListener('change',update);return()=>media.removeEventListener('change',update)},[])
   const menuButton = useRef<HTMLButtonElement>(null)
   const drawer = useRef<HTMLElement>(null)
   const dashboard = usePolling<DashboardSnapshot>('/api/dashboard', 15_000)
@@ -35,15 +45,15 @@ function Shell({ onRefresh, access, onAccessChange }: { onRefresh: () => void; a
   const health = usePolling<{ apiVersion?: number }>('/api/health', 60_000)
   const serverVersion = health.status === 'ready' ? health.data.apiVersion ?? 0 : health.status === 'failed' && health.httpStatus === 404 ? 0 : undefined
   const versionNotice = serverVersion === undefined || serverVersion === API_VERSION ? undefined
-    : serverVersion < API_VERSION ? 'The Ruang server is running an older version than this page, so newer menus (such as Memory) cannot load. Restart the server: stop it, run npm run build, then npm start (npm run dev restarts by itself).'
-      : 'This page is older than the Ruang server. Reload the page (and run npm run build if you use npm start).'
+    : serverVersion < API_VERSION ? 'The OTCA server is running an older version than this page, so newer menus (such as Memory) cannot load. Restart the server: stop it, run npm run build, then npm start (npm run dev restarts by itself).'
+      : 'This page is older than the OTCA server. Reload the page (and run npm run build if you use npm start).'
 
   useEffect(() => {
     const onHashChange = () => setPage(currentPage())
     window.addEventListener('hashchange', onHashChange)
     return () => window.removeEventListener('hashchange', onHashChange)
   }, [])
-  useEffect(() => { document.title = `${page} · Ruang` }, [page])
+  useEffect(() => { document.title = `${page} · OTCA AI Office` }, [page])
   useEffect(() => {
     if (menuOpen) drawer.current?.querySelector<HTMLElement>('nav a[aria-current="page"], nav a')?.focus()
   }, [menuOpen])
@@ -53,7 +63,7 @@ function Shell({ onRefresh, access, onAccessChange }: { onRefresh: () => void; a
       if (event.key.toLowerCase() !== 'm' || event.ctrlKey || event.metaKey || event.altKey) return
       const target = event.target as HTMLElement | null
       if (target && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))) return
-      if (document.querySelector('[role="dialog"]')) return
+      if (document.querySelector('[role="dialog"], dialog[open]:not(.embedded)')) return
       event.preventDefault()
       if (menuOpen) closeMenu(); else setMenuOpen(true)
     }
@@ -72,20 +82,28 @@ function Shell({ onRefresh, access, onAccessChange }: { onRefresh: () => void; a
     setMenuOpen(false)
     window.scrollTo?.({ top: 0 })
   }
-  const syncLabel = data ? `SYNCED ${formatTime(data.fetchedAt)}${dashboard.status === 'ready' && dashboard.stale ? ' · STALE' : ''}` : dashboard.status === 'failed' ? 'API NOT AVAILABLE' : 'CONNECTING...'
+  const labels:Record<Page,string>={Office:'Kantor',Approval:'Review hasil',Agents:'Agent',Usage:'Pemakaian', 'Task Board':'Papan tugas',Calendar:'Kalender',Activity:'Aktivitas',Memory:'Memori',Folders:'Berkas',Logs:'Log sistem',Settings:'Pengaturan'}
+  const syncLabel = data ? `Diperbarui ${formatTime(data.fetchedAt)}${dashboard.status === 'ready' && dashboard.stale ? ' · Data terakhir' : ''}` : dashboard.status === 'failed' ? 'Koneksi terganggu' : 'Menghubungkan…'
 
   const alerts = (data && data.commands.failed > 0 ? 1 : 0)
-  const content = page === 'Agents' ? <Agents runtime={data?.runtime ?? null} pending={dashboard.status === 'pending'}/> : page === 'Office' ? <Office dashboard={data} dashboardPending={dashboard.status === 'pending'} onNavigate={navigate}/> : page === 'Usage' ? <Usage/>: page === 'Task Board' ? <TaskBoard/> : page === 'Calendar' ? <Calendar/> : page === 'Activity' ? <Activity/> : page === 'Memory' ? <Memory onOpenFolders={() => navigate('Folders')}/> : page === 'Folders' ? <Folders/> : page === 'Settings' ? <Settings access={access} onAccessChange={onAccessChange}/> : <Logs/>
+  const content = page === 'Agents' ? <Agents/> : page === 'Office' ? <Office/> : page === 'Approval' ? <Approvals/> : page === 'Usage' ? <Usage/>: page === 'Task Board' ? <TaskBoard/> : page === 'Calendar' ? <Calendar/> : page === 'Activity' ? <Activity/> : page === 'Memory' ? <Memory/> : page === 'Folders' ? <Folders/> : page === 'Settings' ? <Settings access={access} onAccessChange={onAccessChange}/> : <Logs/>
 
-  return <div className={`app${page === 'Office' ? ' app-office' : ''}`}>
-    {menuOpen && <div className="drawer-backdrop" onClick={closeMenu} aria-hidden="true"/>}
-    <aside id="app-sidebar" className="drawer" ref={drawer} hidden={!menuOpen} aria-label="Menu">
-      <div className="drawer-head"><a className="brand" href="#/office" onClick={(event) => { event.preventDefault(); navigate(HOME) }}>RUANG<span>HERMES 3D</span></a><button type="button" className="icon-button" onClick={closeMenu} aria-label="Close menu" title="Close menu (Esc)">✕</button></div>
-      <nav aria-label="Main">{navigation.map((item) => <a href={`#/${pageSlug(item)}`} className={page === item ? 'active' : ''} aria-current={page === item ? 'page' : undefined} key={item} onClick={(event) => { event.preventDefault(); navigate(item) }}>{item}{item === 'Logs' && data && data.commands.failed > 0 && <span className="nav-badge" title="Failed CLI reads">{data.commands.failed}</span>}</a>)}</nav>
-      <div className="sidebar-note"><span className="dot"/> READ-ONLY MODE</div>
-      <small className="drawer-hint">Press M to open or close this menu</small>
+  return <div className={`app workspace-shell${menuOpen ? ' rail-expanded' : ''}${page === 'Office' ? ' app-office' : ''}`}>
+    <a className="skip-content" href="#main-content" onClick={event=>{event.preventDefault();document.getElementById('main-content')?.focus()}}>Lewati ke konten</a>
+    {!desktop && menuOpen && <div className="drawer-backdrop" onClick={closeMenu} aria-hidden="true"/>}
+    <aside id="app-sidebar" className="drawer" ref={drawer} hidden={!desktop && !menuOpen} aria-label="Menu" onKeyDown={event=>{
+        if(desktop || event.key!=='Tab')return
+        const items=drawer.current?.querySelectorAll<HTMLElement>('a,button:not([disabled])');if(!items?.length)return
+        const first=items[0],last=items[items.length-1]
+        if(event.shiftKey && document.activeElement===first){event.preventDefault();last.focus()}
+        else if(!event.shiftKey && document.activeElement===last){event.preventDefault();first.focus()}
+      }}>
+      <div className="drawer-head"><a className="brand" href="#/office" onClick={(event) => { event.preventDefault(); navigate(HOME) }}><img src="/brands/otca/logo.png" alt="OTCA"/><span>AI Office</span></a><button type="button" className="icon-button" onClick={closeMenu} aria-label="Tutup menu" title="Tutup menu (Esc)">✕</button></div>
+      <nav aria-label="Navigasi utama">{[...navigation].sort((a,b)=>['Office','Task Board','Approval','Agents','Event','Calendar','Activity','Memory','Folders','Usage','Logs','Settings'].indexOf(a)-['Office','Task Board','Approval','Agents','Event','Calendar','Activity','Memory','Folders','Usage','Logs','Settings'].indexOf(b)).map((item) => <a href={`#/${pageSlug(item)}`} aria-label={labels[item]} title={labels[item]} className={page === item ? 'active' : ''} aria-current={page === item ? 'page' : undefined} key={item} onClick={(event) => { event.preventDefault(); navigate(item) }}><NavigationIcon page={item}/><span className="rail-label">{labels[item]}</span>{item === 'Logs' && data && data.commands.failed > 0 && <span className="nav-badge" title="Failed CLI reads">{data.commands.failed}</span>}</a>)}</nav>
+      <div className="sidebar-note">Kantor digital OTCA</div>
+      <small className="drawer-hint">Tekan M untuk menu</small>
     </aside>
-    <main><header><span className="header-title"><button type="button" ref={menuButton} className="icon-button menu-button" onClick={() => (menuOpen ? closeMenu() : setMenuOpen(true))} aria-controls="app-sidebar" aria-expanded={menuOpen} aria-label={menuOpen ? 'Close menu' : 'Open menu'} title="Menu (M)">☰{alerts > 0 && <span className="menu-alert" aria-label={`${alerts} alert${alerts === 1 ? '' : 's'} in the menu`}/>}</button><span>RUANG / {page.toUpperCase()}</span></span><span className="header-actions"><span className={`sync-label${dashboard.status === 'failed' ? ' text-bad' : ''}`}>{syncLabel}</span><button type="button" className="icon-button theme-toggle" onClick={toggleTheme} aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`} title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}>{theme === 'dark' ? '☀' : '☾'}</button><button type="button" className="refresh-button" onClick={onRefresh} aria-label="Refresh all sources">↻ REFRESH</button></span></header>
+    <main id="main-content" tabIndex={-1}><header><span className="header-title"><button type="button" ref={menuButton} className="icon-button menu-button" onClick={() => (menuOpen ? closeMenu() : setMenuOpen(true))} aria-controls="app-sidebar" aria-expanded={menuOpen} aria-label={menuOpen ? 'Tutup menu' : 'Buka menu'} title="Menu (M)">☰{alerts > 0 && <span className="menu-alert" aria-label={`${alerts} alert${alerts === 1 ? '' : 's'} in the menu`}/>}</button><span>OTCA / {labels[page]}</span></span><span className="header-actions"><span className={`sync-label${dashboard.status === 'failed' ? ' text-bad' : ''}`}>{syncLabel}</span><button type="button" className="icon-button theme-toggle" onClick={toggleTheme} aria-label={`Gunakan tema ${theme === 'dark' ? 'terang' : 'gelap'}`} title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}>{theme === 'dark' ? '☀' : '☾'}</button><button type="button" className="refresh-button" onClick={onRefresh} aria-label="Segarkan semua data">Segarkan</button></span></header>
       {versionNotice && <section className="notice version-notice" role="alert"><strong>Restart needed.</strong> {versionNotice}</section>}
       {content}
     </main></div>

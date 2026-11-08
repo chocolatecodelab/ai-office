@@ -1,0 +1,100 @@
+{
+  "brand": "Official OTCA",
+  "status": "RESMI",
+  "source": "Brand Guidelines OTCA (New)",
+  "colors": {
+    "black": "#000000",
+    "solid_gold": "#CB9D31",
+    "gradient_gold": [
+      "#CB9D31",
+      "#FDF1A4",
+      "#B3822C"
+    ],
+    "white": "#FFFFFF"
+  },
+  "color_roles": {
+    "#000000": "background utama dan opsional teks",
+    "#CB9D31": "teks headline & subheadline, elemen pendukung",
+    "gradient_gold": "elemen pendukung",
+    "#FFFFFF": "teks body dan elemen pendukung"
+  },
+  "fonts": {
+    "headline": {
+      "family": "Montserrat",
+      "weight": "ExtraBold",
+      "size_pt": [
+        40,
+        75
+      ],
+      "capcut_pt": 12
+    },
+    "subheadline": {
+      "family": "Montserrat",
+      "weight": "Bold",
+      "size_pt": [
+        24,
+        48
+      ],
+      "capcut_pt": 10
+    },
+    "body": {
+      "family": "Montserrat",
+      "weight": "SemiBold atau Medium",
+      "size_pt": [
+        18,
+        24
+      ],
+      "capcut_pt": [
+        6,
+        7
+      ]
+    },
+    "highlight": {
+      "family": "Montserrat",
+      "weight": "Bold"
+    }
+  },
+  "formats": {
+    "ig_feed": {
+      "w": 1080,
+      "h": 1350,
+      "margin_x": 108,
+      "margin_y": 108
+    },
+    "reels_cover": {
+      "w": 1080,
+      "h": 1920,
+      "margin_x": 108,
+      "margin_y": 421
+    },
+    "ig_story": {
+      "w": 1080,
+      "h": 1920,
+      "margin_x": 108,
+      "margin_y": 315
+    }
+  },
+  "logo": {
+    "w": 235,
+    "h": 72,
+    "variants": {
+      "glow": "desain logo besar / penekanan: banner, poster, profile picture",
+      "tanpa_glow": "logo kecil, sudut konten sosmed"
+    }
+  },
+  "footer": {
+    "w": 230,
+    "h": 40,
+    "text": "www.otca.co.id"
+  },
+  "patterns": [
+    "Line gradient gold, ketebalan 7, linear gradient 90°, horizontal/vertikal",
+    "Rectangle gradient gold, linear gradient 180°, ukuran bebas, desain tetap dominan hitam"
+  ],
+  "rules": [
+    "Transparansi foto background maksimal 30 jika desain masih banyak ruang; 10 jika konten padat",
+    "Bagian bawah feed: gradient hitam ke transparan agar gambar lebih halus",
+    "Gunakan elemen gambar yang menunjukkan kesan eksklusif",
+    "Elemen utama bisa foto; elemen opsional 3D atau vector dengan warna yang harmonis"
+  ]
+}

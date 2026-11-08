@@ -1,0 +1,7 @@
+# Hermes Agent with the Langfuse SDK baked into its own venv, so traces survive container recreation.
+# The base image is the one pinned in infra/compose.hermes.yml; the plugin itself is installed from
+# the official repo (NousResearch/hermes-official-plugins, langfuse 2.0.0) into /opt/data/plugins.
+FROM nousresearch/hermes-agent@sha256:9c5561579f3ffdf333401797094ac3a743738d6c25d40f4331c7bf77b694238d
+RUN /opt/hermes/.venv/bin/python -m ensurepip --upgrade \
+ && /opt/hermes/.venv/bin/python -m pip install --no-cache-dir "langfuse==4.15.2" \
+ && /opt/hermes/.venv/bin/python -c "from langfuse import Langfuse, propagate_attributes"

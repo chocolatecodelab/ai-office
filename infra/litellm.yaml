@@ -1,0 +1,18 @@
+# LiteLLM: the single gateway to paid models (blueprint Bab 10). Callers use the aliases below with a
+# virtual key from scripts/litellm-setup.mjs; budgets per pool and per brand are enforced here.
+model_list:
+  - model_name: cepat   # Haiku 5.5: drafts, simple tasks, segment summaries
+    litellm_params: { model: anthropic/claude-haiku-5-5, api_key: os.environ/ANTHROPIC_API_KEY }
+  - model_name: final   # Sonnet 5.5: final copy (≤20% CC, ≤30% Event, ≤50% DM)
+    litellm_params: { model: anthropic/claude-sonnet-5-5, api_key: os.environ/ANTHROPIC_API_KEY }
+  - model_name: video   # Opus 5.5: Video Editor edit plans only
+    litellm_params: { model: anthropic/claude-opus-5-5, api_key: os.environ/ANTHROPIC_API_KEY }
+  - model_name: gambar  # GPT Image: image ads & carousel drafts
+    litellm_params: { model: openai/gpt-image-1.5, api_key: os.environ/OPENAI_API_KEY }
+
+litellm_settings:
+  drop_params: true
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  database_url: os.environ/DATABASE_URL

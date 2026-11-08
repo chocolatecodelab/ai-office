@@ -1,0 +1,13 @@
+# Tinjauan konteks chat — 5 November 2026
+
+- Tombol Tinjau konteks tersedia sebelum mengirim chat, mengikuti brand dan agent aktif. Endpoint POST context-preview melakukan pembacaan konteks lokal/database tanpa membuat tugas, menyimpan memori, melakukan OCR, atau memanggil model.
+- Sumber resmi menampilkan daftar file inti dan referensi yang dipilih oleh kebijakan yang sama dengan runner. Aturan inti tetap berlaku. Preview Manager membedakan chat biasa dari delegasi.
+- Catatan yang disertakan dapat dibuka untuk membaca isi, cakupan brand/agent dan alasan kecocokan kata. Toggle Gunakan memori berlaku pada memori tambahan dan ringkasan, bukan aturan. Tautan Kelola memori & rules membuka tab pengelolaan agent.
+- Catatan dan prompt dikompilasi dengan fungsi bersama; batas karakter memperhitungkan header, pemisah dan pemberitahuan penghilangan. Urutan relevansi memori chat dipertahankan, tidak diurutkan ulang berdasarkan tanggal setelah retrieval. Tugas non-chat mempertahankan urutan tanggal sebelumnya.
+- Preview serta jejak jawaban melaporkan catatan yang tidak muat; daftar catatan yang dipakai kini berisi hanya catatan yang benar-benar dikirim dalam prompt. Peringatan juga menyebut aturan tambahan yang tidak muat. Aturan resmi terpisah tetap disertakan.
+- Skill pencarian dokumen dan analisis CSV ditandai Tool aplikasi; skill lainnya Panduan kerja. Tidak ada pemasangan plugin Hermes native atau perluasan izin eksternal pada fase ini.
+- Preview dimuat atas tindakan pengguna. Perubahan pesan, agent, mode delegasi, toggle memori atau skill membuat hasil sebelumnya tidak berlaku dan menyembunyikannya. Tombol Perbarui tinjauan memuat kondisi terbaru; Escape/tombol tutup mengembalikan fokus ke pemicu.
+
+Batas: ukuran karakter pada preview hanya untuk catatan tim, bukan total token/biaya. Preview belum mengeksekusi lampiran atau menghitung konteks riwayat; keduanya disiapkan saat eksekusi. Isi dapat berubah selama antrean; jejak jawaban mencatat keadaan pada eksekusi. Retrieval memori tetap pencocokan kata, belum semantic/vector search.
+
+Validasi: 37 tes terkait lulus (27 integrasi Postgres office_test +10 unit/UI/regresi). Integrasi membuktikan preview tidak menulis baris memori, menjaga scope brand, menghormati toggle, dan menampilkan ID catatan yang sama dengan prompt Hermes. Tes UI memastikan draft baru menyembunyikan hasil lama serta preview tidak mengirim chat. Build produksi, TypeScript, lint file berubah dan git diff --check lulus. QA browser memverifikasi preview langsung untuk Content Creator OTCA pada desktop dan390x844; tidak mengirim pesan/model baru. Override viewport dikembalikan dan draft QA dibersihkan. Bukti: tmp/context-preview-desktop.png dan tmp/context-preview-mobile.png.

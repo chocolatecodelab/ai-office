@@ -1,0 +1,55 @@
+# AI Office 3D OTCA: shared services of the Blueprint v3.1 stack (docs/PLAN.md 5.2).
+# No ports are published here (SEC-01); compose.local.yml opens them on 127.0.0.1 for development.
+# Image versions are pinned (SEC-12); update them through staging.
+name: ai-office
+
+services:
+  postgres:
+    image: postgres:16.10-alpine
+    restart: unless-stopped
+    env_file: env/postgres.env
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d office"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    mem_limit: 2g
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    mem_limit: 512m
+
+  litellm:
+    # main-stable as of 2 Nov 2026 (litellm 1.106.6), pinned by digest.
+    image: ghcr.io/berriai/litellm@sha256:37e2dafb088a7723beb998590682957386dfc83ffea1848486f8e0e5cfac0b06
+    restart: unless-stopped
+    env_file: env/litellm.env
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    volumes:
+      - ./litellm.yaml:/app/config.yaml:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness')\""]
+      interval: 15s
+      timeout: 10s
+      start_period: 60s
+      retries: 10
+    mem_limit: 1g
+
+volumes:
+  postgres-data:
+  redis-data:

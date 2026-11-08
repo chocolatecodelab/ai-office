@@ -15,7 +15,7 @@ function StatTile({ label, value, detail, onClick }: { label: string; value: str
 /** The operations overview (formerly the Dashboard page), shown in the Office panel's Stats tab. */
 export function Stats({ dashboard, pending = false, onNavigate }: { dashboard: DashboardSnapshot | null; pending?: boolean; onNavigate?: (page: Page) => void }) {
   if (pending) return <LoadingState message="Reading runtime signals..."/>
-  if (!dashboard) return <EmptyState title="Not Available">The Ruang API could not be reached. Start it with <code>npm run dev</code>.</EmptyState>
+  if (!dashboard) return <EmptyState title="Not Available">The OTCA API could not be reached. Start it with <code>npm run dev</code>.</EmptyState>
   const { runtime, tasks, calendar, activity, knowledge, channels, office, commands } = dashboard
   const go = (page: Page) => onNavigate ? () => onNavigate(page) : undefined
   const openTasks = Object.entries(tasks.byStatus).filter(([status]) => !['done', 'archived'].includes(status)).reduce((sum, [, count]) => sum + count, 0)
@@ -23,9 +23,9 @@ export function Stats({ dashboard, pending = false, onNavigate }: { dashboard: D
   const hermesMissing = /not installed/i.test(runtime.profiles.error?.message ?? '')
 
   return <div className="stats-view">
-    {hermesMissing && <section className="notice" role="status"><strong>Hermes CLI not found.</strong> Ruang reads everything through the <code>hermes</code> command. Install Hermes Agent and make sure <code>hermes</code> is on the PATH of the shell that runs <code>npm run dev</code>, then press Refresh all.</section>}
+    {hermesMissing && <section className="notice" role="status"><strong>Hermes CLI not found.</strong> OTCA reads everything through the <code>hermes</code> command. Install Hermes Agent and make sure <code>hermes</code> is on the PATH of the shell that runs <code>npm run dev</code>, then press Refresh all.</section>}
     <section className="stat-grid" aria-label="Key statistics">
-      <StatTile label="Gateways running" value={`${office.gatewaysReachable} / ${office.gatewaysDeclared}`} detail="Hermes profiles" onClick={go('Agents')}/>
+      <StatTile label="Gateways running" value={`${office.gatewaysReachable} / ${office.gatewaysDeclared}`} detail="Claude agents" onClick={go('Agents')}/>
       <StatTile label="Crew active" value={`${office.active} / ${office.declared}`} detail={`${office.idle} idle · ${office.offline} offline · ${office.unknown} unknown`} />
       <StatTile label="Open tasks" value={tasks.availability === 'available' ? formatNumber(openTasks) : 'Not Available'} detail={tasks.availability === 'available' ? `${formatNumber(tasks.total)} total · ${tasks.byStatus.running ?? 0} running` : undefined} onClick={go('Task Board')}/>
       <StatTile label="Scheduled jobs" value={availableCount(calendar)} detail={calendar.availability === 'available' ? `${calendar.active} active · ${calendar.paused} paused` : undefined} onClick={go('Calendar')}/>
@@ -50,7 +50,7 @@ export function Stats({ dashboard, pending = false, onNavigate }: { dashboard: D
       <article className="card">
         <p className="eyebrow">RUNTIME</p>
         <dl className="runtime-list">
-          <div><dt>Hermes profiles</dt><dd>{runtime.profiles.availability === 'available' ? runtime.profiles.data.length : 'Not Available'}</dd></div>
+          <div><dt>Claude agents</dt><dd>{runtime.profiles.availability === 'available' ? runtime.profiles.data.length : 'Not Available'}</dd></div>
           <div><dt>Gateways running</dt><dd>{runtime.profiles.availability === 'available' ? `${runtime.profiles.data.filter((profile) => profile.gateway === 'Running').length} of ${runtime.profiles.data.length}` : 'Not Available'}</dd></div>
           <div><dt>Models in use</dt><dd>{runtime.profiles.availability === 'available' ? [...new Set(runtime.profiles.data.map((profile) => profile.model).filter((model) => model !== 'Not configured'))].join(', ') || '—' : 'Not Available'}</dd></div>
           <div><dt>OpenCode</dt><dd>{runtime.openCode.availability === 'available' ? runtime.openCode.data : 'Not installed'}</dd></div>
@@ -66,6 +66,6 @@ export function Stats({ dashboard, pending = false, onNavigate }: { dashboard: D
         </dl>
       </article>
     </section>
-    <p className="card-note">Live reads from Hermes and OpenCode, cached server-side for 10 seconds and refreshed automatically.</p>
+    <p className="card-note">Live reads dari layanan agen OTCA AI Office, diperbarui otomatis.</p>
   </div>
 }

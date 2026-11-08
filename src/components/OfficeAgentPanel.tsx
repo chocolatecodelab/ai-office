@@ -1,0 +1,200 @@
+import { ChatVideo } from './ChatVideo.tsx'
+import { isChatVideo } from '../chat-media.ts'
+import { ChatArtifactReader } from './ChatArtifactReader.tsx'
+import { ChatIcon } from './ChatIcon.tsx'
+import { ChatProjects, ProductionSourceChip } from './ChatProjects.tsx'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { AGENT_NAMES, AGENT_STATUS_LABELS, TASK_STATUS_LABELS, officeRequest, useOfficeLive, type OfficeAgent, type OfficeBrand, type OfficeTask, type OfficeApproval } from '../office-api.ts'
+import { useAgentDraft } from '../agent-drafts.ts'
+import { ReadOnlyMarkdown } from './ReadOnlyMarkdown.tsx'
+import { ApprovalWorkspace } from './ApprovalWorkspace.tsx'
+import { approvalPending } from '../approval-review.ts'
+import { AgentTaskList, AgentFolder, AgentMemoryWorkspace } from './AgentWorkspaceTabs.tsx'
+import { OfficeTaskForm } from './OfficeTaskForm.tsx'
+import { AgentProduction } from './AgentProduction.tsx'
+import { downloadText, sizeLabel } from '../download.ts'
+import { ChatWorkspaceTools, ChatDocumentProgress, type ChatSelection } from './ChatWorkspace.tsx'
+import { PixelCharacter } from '../pages/OfficeDetails.tsx'
+
+const TABS = ['Chat', 'Tugas', 'Approval', 'Folder', 'Memori & Rules'] as const
+type Tab = typeof TABS[number]
+
+function ChatArtifactGroup({collapsible,children}:{collapsible:boolean;children:ReactNode}){
+  return collapsible?<details className="chat-production-extras"><summary>Caption dan berkas pendukung</summary>{children}</details>:<>{children}</>
+}
+
+export function OfficeAgentPanel({ brand, agent, onClose, embedded = false, initialTab = 'Chat' }: { brand: OfficeBrand; agent: OfficeAgent; onClose: () => void; embedded?: boolean; initialTab?: Tab }) {
+  const dialog = useRef<HTMLDialogElement>(null)
+  const end = useRef<HTMLDivElement>(null)
+  const composer=useRef<HTMLFormElement>(null)
+  const messageField=useRef<HTMLTextAreaElement>(null)
+  const actionsMenu=useRef<HTMLDetailsElement>(null)
+  const dialogMode=useRef<'modal'|'inline'|undefined>(undefined)
+  const [expanded,setExpanded]=useState(false)
+  const [showProjects,setShowProjects]=useState(false)
+  const [showLatest,setShowLatest]=useState(false)
+  const [composerHeight,setComposerHeight]=useState(160)
+  const followLatest=useRef(true)
+  const [tab,setTab] = useState<Tab>(initialTab)
+  useEffect(()=>{
+    const closeMenu=(event:PointerEvent)=>{const menu=actionsMenu.current;if(menu?.open&&event.target instanceof Node&&!menu.contains(event.target))menu.open=false}
+    document.addEventListener('pointerdown',closeMenu)
+    return()=>document.removeEventListener('pointerdown',closeMenu)
+  },[])
+  useLayoutEffect(()=>{
+    const node=dialog.current;if(!node)return
+    const focused=document.activeElement as HTMLElement|null
+    const next=!embedded||expanded?'modal':'inline'
+    if(dialogMode.current!==next){
+      if(next==='modal'){if(node.open)node.close();node.showModal()}
+      else if(dialogMode.current==='modal'){node.close();node.show()}
+      dialogMode.current=next
+      if(focused&&node.contains(focused))focused.focus()
+    }
+  },[embedded,expanded])
+  useEffect(()=>{if(!composer.current || typeof ResizeObserver==='undefined')return;const node=composer.current;const observer=new ResizeObserver(()=>setComposerHeight(node.getBoundingClientRect().height));observer.observe(node);return()=>observer.disconnect()},[tab])
+  const [tasks,setTasks] = useState<OfficeTask[]>([])
+  const [approvals,setApprovals] = useState<OfficeApproval[]>([])
+  const [input,setInput] = useAgentDraft<string>(brand.id+'/'+agent.agentType+'/chat','')
+  const [productionSource,setProductionSource] = useAgentDraft<string>(brand.id+'/'+agent.agentType+'/production-source','')
+  useLayoutEffect(()=>{const field=messageField.current;if(!field)return;field.style.height='auto';field.style.height=`${Math.min(132,Math.max(40,field.scrollHeight))}px`},[input,tab])
+  const [error,setError] = useState('')
+  const [loadError,setLoadError] = useState('')
+  const [busy,setBusy] = useState(false)
+  const [delegate,setDelegate] = useState(false)
+  const [selection,setSelection]=useState<ChatSelection>({attachments:[],skills:[],useMemory:true})
+  const [uploading,setUploading]=useState(false)
+  const [ready,setReady] = useState(false)
+  const [importing,setImporting] = useState(false)
+  const [openFile,setOpenFile] = useState<string>()
+  const sessionKey = `office-chat-session:${brand.id}:${agent.agentType}`
+  const [sessionCutoff,setSessionCutoff] = useState<string>(() => {
+    try { return localStorage.getItem(sessionKey) ?? '' } catch { return '' }
+  })
+  const [showArchive,setShowArchive] = useState(false)
+  const [visibleLimit,setVisibleLimit] = useState(20)
+  const [dismissedTaskIds,setDismissedTaskIds] = useState<Set<string>>(() => new Set())
+  const [compacting,setCompacting] = useState(false)
+  const [compactNotice,setCompactNotice] = useState('')
+  const actionLock=useRef(false)
+  const active = useRef(true)
+  const generation = useRef(0)
+  const base = `/brands/${encodeURIComponent(brand.id)}`
+  const agentBase = `${base}/agents/${encodeURIComponent(agent.agentType)}`
+  const name = AGENT_NAMES[agent.agentType] ?? agent.agentType
+  const reload = useCallback(async () => {
+    const request = ++generation.current
+    try {
+      const [all, reviews] = await Promise.all([officeRequest<OfficeTask[]>('GET',`${base}/tasks`),officeRequest<OfficeApproval[]>('GET',`${base}/approvals`)])
+      if (!active.current || request !== generation.current) return
+      setTasks(all.filter(t => t.agentType === agent.agentType))
+      setApprovals(reviews.filter(a => a.task?.agentType === agent.agentType))
+      setReady(true)
+      setLoadError('')
+    } catch(e) { if (active.current) setLoadError(String(e)) }
+  },[base,agent.agentType])
+  useOfficeLive(brand.id,() => void reload())
+  useEffect(() => {
+    active.current = true
+    const previous = document.activeElement as HTMLElement | null
+    void reload()
+    const timer=setInterval(() => { if (!document.hidden) void reload() },5000)
+    return () => { active.current=false; clearInterval(timer); previous?.focus() }
+  },[reload,embedded])
+  const latestReply = tasks.filter(t => t.kind === 'konten.chat').map(t => `${t.id}:${t.status}:${t.result?.length ?? 0}`).join('|')
+  useEffect(() => { if (tab === 'Chat' && followLatest.current && end.current?.parentElement) {const area=end.current.parentElement;area.scrollTop=area.scrollHeight} },[latestReply,tab,expanded])
+  const perform = async (work: () => Promise<unknown>) => {
+    if(actionLock.current) return
+    actionLock.current=true
+    setBusy(true); setError('')
+    try { await work(); if(active.current) await reload() } catch(e) { if(active.current) { setError(String(e)); await reload() } }
+    finally { actionLock.current=false; if(active.current) setBusy(false) }
+  }
+  const send = () => {
+    const message=input.trim()
+    if (!message || busy || uploading || pending || !ready) return
+    if(delegate && agent.agentType==='manager') {
+      void perform(async()=>{await officeRequest('POST',`${base}/tasks`,{agentType:'manager',kind:'konten.orchestrasi',title:message.slice(0,200),brief:message,attachmentIds:selection.attachments.map(f=>f.id),skills:selection.skills,useMemory:selection.useMemory,pageRanges:selection.pageRanges,excludedMemoryIds:selection.excludedMemoryIds,useSummary:selection.useSummary});setSelection(old=>({...old,attachments:[],skills:[],pageRanges:{},excludedMemoryIds:[],useSummary:true}));setInput(previous=>previous.trim()===message?'':previous);setTab('Tugas')});return
+    }
+    followLatest.current=true
+    void perform(async () => { await officeRequest('POST',`${agentBase}/chat`,{message,...(productionSource?{productionSourceTaskId:productionSource}:{}),attachmentIds:selection.attachments.map(f=>f.id),skills:selection.skills,useMemory:selection.useMemory,pageRanges:selection.pageRanges,excludedMemoryIds:selection.excludedMemoryIds,useSummary:selection.useSummary}); setInput(previous=>previous.trim()===message?'':previous);setSelection(old=>({...old,attachments:[],skills:[],pageRanges:{},excludedMemoryIds:[],useSummary:true})) })
+  }
+  const chats=tasks.filter(t => t.kind === 'konten.chat').slice().reverse()
+  const pending=chats.some(t => ['queued','running','waiting_quota','revision'].includes(t.status))
+  const sessionChats=(sessionCutoff && !showArchive)
+    ? chats.filter(t => t.createdAt >= sessionCutoff)
+    : chats
+  const visibleTurnList=sessionChats.filter(t => !(t.status==='failed' && dismissedTaskIds.has(t.id)))
+  const totalInView=visibleTurnList.length
+  const visibleChats=visibleTurnList.slice(Math.max(0, totalInView - visibleLimit))
+  const hiddenCount=Math.max(0, totalInView - visibleLimit)
+  const startNewSession = () => {
+    if (chats.length > 0 && !window.confirm('Mulai percakapan baru? Pesan terdahulu akan diarsipkan dan tetap dapat diakses melalui opsi "Lihat arsip pesan lama".')) return
+    const now = new Date().toISOString()
+    try { localStorage.setItem(sessionKey, now) } catch {}
+    setSessionCutoff(now)
+    setShowArchive(false)
+    setVisibleLimit(20)
+    if (actionsMenu.current) actionsMenu.current.open = false
+  }
+  const toggleArchive = () => {
+    setShowArchive(v => !v)
+    if (actionsMenu.current) actionsMenu.current.open = false
+  }
+  const triggerCompaction = async () => {
+    if (compacting || busy) return
+    setCompacting(true)
+    setCompactNotice('Meringkas konteks percakapan…')
+    try {
+      const res = await officeRequest<{ compacted: boolean; summary?: string; message?: string }>('POST', `${agentBase}/compact-memory`)
+      if (res.compacted) {
+        setCompactNotice(`Konteks percakapan berhasil dipadatkan (${res.summary?.length ?? 0} karakter ringkasan).`)
+        await reload()
+      } else {
+        setCompactNotice(res.message || 'Belum ada percakapan untuk diringkas.')
+      }
+    } catch (e) {
+      setCompactNotice(`Gagal meringkas: ${String(e)}`)
+    } finally {
+      setCompacting(false)
+      setTimeout(() => setCompactNotice(''), 6000)
+    }
+  }
+  const exportChat = () => {
+    const data=chats.flatMap(t => [{role:'user',content:t.brief,timestamp:t.createdAt},...(t.result ? [{role:'assistant',content:t.result,timestamp:t.updatedAt}] : [])])
+    const url=URL.createObjectURL(new Blob([JSON.stringify({brand:brand.id,agent:agent.agentType,messages:data},null,2)],{type:'application/json'}))
+    const link=document.createElement('a');link.href=url;link.download=`chat-${brand.id}-${agent.agentType}.json`;link.click()
+    setTimeout(()=>URL.revokeObjectURL(url),1000)
+  }
+  return <dialog open={embedded || undefined} onKeyDown={e=>{if(e.key==='Escape')onClose()}} ref={dialog} aria-label={`${name} · ${brand.name}`} className={`office-agent-panel${tab==='Chat' ? ' is-chat' : ''}${embedded ? ' embedded' : ''}${expanded ? ' is-expanded' : ''}`} onCancel={e=>{if(e.target!==e.currentTarget)return;e.preventDefault();onClose()}} onClick={e => { if(e.target===e.currentTarget) onClose() }}>
+    <header className="office-panel-heading"><PixelCharacter agent={`${brand.id}/${agent.agentType}`}/><div className="chat-agent-identity"><h2 title={name}>{name}</h2><div className="chat-agent-meta"><small>{brand.name}</small><span data-status={agent.status}>{AGENT_STATUS_LABELS[agent.status]}</span></div></div><div className="chat-window-actions"><button className="panel-expand-control" aria-label={expanded ? "Kembalikan ukuran panel" : "Perbesar ruang percakapan"} title={expanded ? "Kembalikan ukuran panel" : "Perbesar ruang percakapan"} aria-pressed={expanded} onClick={()=>setExpanded(v=>!v)}><ChatIcon name={expanded ? "collapse" : "expand"}/></button>{tab==='Chat'&&<details ref={actionsMenu} className="chat-header-menu" onKeyDown={e=>{if(e.key==='Escape'){e.preventDefault();e.stopPropagation();if(actionsMenu.current){actionsMenu.current.open=false;actionsMenu.current.querySelector<HTMLElement>('summary')?.focus()}}}}><summary aria-label="Menu percakapan" title="Menu percakapan"><ChatIcon name="more"/></summary><div>{['content-creator','video-editor'].includes(agent.agentType)&&<><button onClick={()=>{setShowProjects(true);if(actionsMenu.current)actionsMenu.current.open=false}}>Proyek dan versi{productionSource?' (sumber dipilih)':''}</button>{productionSource&&<button onClick={()=>{setProductionSource('');if(actionsMenu.current)actionsMenu.current.open=false}}>Lepas sumber revisi</button>}</>}<button onClick={startNewSession}>Percakapan baru (Sesi baru)</button>{sessionCutoff&&<button onClick={toggleArchive}>{showArchive?'Kembali ke sesi aktif':'Lihat arsip pesan lama'}</button>}<button disabled={compacting||!chats.length} onClick={()=>{void triggerCompaction();if(actionsMenu.current)actionsMenu.current.open=false}}>{compacting?'Meringkas konteks…':'Ringkas konteks (Compact)'}</button><button onClick={()=>{setImporting(v=>!v);if(actionsMenu.current)actionsMenu.current.open=false}}>Impor percakapan</button><button disabled={!chats.length} onClick={()=>{exportChat();if(actionsMenu.current)actionsMenu.current.open=false}}>Ekspor percakapan</button></div></details>}<button autoFocus onClick={onClose} aria-label="Tutup panel agent"><ChatIcon name="close"/></button></div></header>
+    <nav className="office-panel-tabs" aria-label="Detail agent">{TABS.map(t => <button key={t} aria-pressed={tab===t} onClick={() => setTab(t)}>{t==='Approval'?'Review':t}{t==='Approval' && approvals.filter(approvalPending).length>0 ? ` (${approvals.filter(approvalPending).length})` : ''}</button>)}</nav>
+    {(error || loadError) && <p role="alert">{error || loadError} <button onClick={() => {setError('');void reload()}}>Coba lagi</button></p>}
+    <div className="office-panel-content"><ChatDocumentProgress base={agentBase} active={tasks.some(t=>['running','queued','revision'].includes(t.status))}/>
+      {!ready && <p>Memuat riwayat agent…</p>}
+      {tab==='Chat' && <div className="office-conversation" style={{'--chat-composer-height':`${composerHeight}px`} as CSSProperties}><div className="office-chat-utilities">{agent.agentType==='manager'&&<label className="manager-chat-mode"><input type="checkbox" checked={delegate} onChange={e=>setDelegate(e.target.checked)}/> Delegasi tim <span className="chat-visually-hidden">Membuat tugas spesialis; progres tersedia di tab Tugas.</span></label>}{importing&&<p>Tempel riwayat ke kolom pesan (maksimal 12.000 karakter), lalu tinjau sebelum mengirim. <button onClick={()=>setImporting(false)}>Tutup panduan impor</button></p>}</div><div className="chat-messages-area" onScroll={e=>{const area=e.currentTarget;followLatest.current=area.scrollHeight-area.scrollTop-area.clientHeight<80;setShowLatest(!followLatest.current)}}>
+        {sessionCutoff && showArchive && <div className="chat-session-banner"><span>📂 Menampilkan seluruh riwayat arsip ({sessionChats.length} pesan).</span><button type="button" onClick={()=>setShowArchive(false)}>Kembali ke sesi aktif</button></div>}
+        {compactNotice && <div className="chat-session-banner"><span>{compactNotice}</span><button type="button" onClick={()=>setCompactNotice('')}>✕</button></div>}
+        {hiddenCount>0 && <div className="chat-load-older"><button type="button" onClick={()=>setVisibleLimit(v=>v+20)}>↑ Muat {Math.min(20,hiddenCount)} pesan sebelumnya ({hiddenCount} tersisa)</button><button type="button" onClick={()=>setVisibleLimit(totalInView)}>Tampilkan semua ({totalInView})</button></div>}
+        {ready && visibleTurnList.length===0 && <div className="chat-empty-hint"><h3>Halo, saya {name}.</h3><p>{sessionCutoff && !showArchive ? 'Sesi percakapan baru dimulai. Diskusikan kebutuhan brand atau berikan brief baru.' : `Diskusikan kebutuhan ${brand.name} atau berikan brief. Hasil kerja tetap melalui approval.`}</p><div style={{display:'flex',gap:'8px',flexWrap:'wrap',justifyContent:'center'}}><button onClick={() => setInput('Apa yang bisa kamu bantu sesuai peran dan aturan brand ini?')}>Kenali peran agent</button>{sessionCutoff && !showArchive && chats.length>0 && <button type="button" onClick={()=>setShowArchive(true)}>Lihat arsip riwayat ({chats.length})</button>}</div></div>}
+        {visibleChats.map((t,index) => <div key={t.id} className="chat-turn">{(index===0||new Date(visibleChats[index-1].createdAt).toLocaleDateString()!==new Date(t.createdAt).toLocaleDateString())&&<div className="chat-day-marker"><span>{new Date(t.createdAt).toLocaleDateString('id-ID',{day:'numeric',month:'long',year:'numeric'})}</span></div>}
+          <div className="chat-bubble-row user-row"><div className="chat-bubble user-bubble"><div className="bubble-content">{t.brief}</div><div className="bubble-footer"><span className="chat-visually-hidden">Anda · </span><time dateTime={t.createdAt} title={new Date(t.createdAt).toLocaleString('id-ID')}>{new Date(t.createdAt).toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'})}</time></div></div></div>
+          <div className="chat-bubble-row agent-row"><div className="chat-bubble agent-bubble"><div className="bubble-header"><span>{name}</span>{t.status!=='done'&&<span className="chat-reply-status">{TASK_STATUS_LABELS[t.status]}</span>}</div><div className="bubble-content">{t.status==='failed'&&t.error ? t.error : (t.text ?? t.result) ? <ReadOnlyMarkdown text={(t.text ?? t.result)!}/> : t.error || (t.status==='running' ? 'Sedang menyusun jawaban…' : t.status==='waiting_quota' ? 'Menunggu kuota tersedia.' : 'Pesan masuk antrean.')}</div>{t.status==='waiting_quota'&&t.retryAt&&<p className="chat-quota-retry">Coba lagi otomatis: <time dateTime={t.retryAt}>{new Date(t.retryAt).toLocaleString('id-ID')}</time>. Server harus tetap aktif.</p>}
+          {(t.artifacts??[]).some(file=>file.mime==='image/png')&&<div className="chat-rendered-gallery" aria-label="Gambar hasil produksi">{(t.artifacts??[]).filter(file=>file.mime==='image/png'&&file.assetId).sort((a,b)=>Number(a.name==='review.png')-Number(b.name==='review.png')||a.name.localeCompare(b.name)).map(file=><figure key={file.assetId}><a href={`/api/office${base}/assets/${file.assetId}/file?inline=1`} target="_blank" rel="noreferrer" aria-label={`Buka gambar ${file.name}`}><img loading="lazy" src={`/api/office${base}/assets/${file.assetId}/file?inline=1`} alt={file.name}/></a><figcaption><span>{file.name}</span><a href={`/api/office${base}/assets/${file.assetId}/file`} download={file.name}>Unduh</a></figcaption></figure>)}</div>}
+          {(t.artifacts??[]).filter(file=>isChatVideo(file)&&file.assetId).map(file=><ChatVideo key={file.assetId} base={base} file={{...file,assetId:file.assetId!,posterId:t.artifacts?.find(f=>f.name==='thumbnail.png')?.assetId,subtitleId:t.artifacts?.find(f=>f.name==='subtitle.vtt')?.assetId,srtId:t.artifacts?.find(f=>f.name==='subtitle.srt')?.assetId}}/>)}
+          <ChatArtifactGroup collapsible={(t.artifacts??[]).some(file=>file.mime==='image/png'||isChatVideo(file))}>{(t.artifacts ?? []).filter(file=>file.mime!=='image/png'&&!(isChatVideo(file)&&file.assetId)).map(file => <div className="chat-file" key={file.name}>
+            <div className="chat-file-head"><strong>{file.name}</strong><small>{sizeLabel(file.size??new Blob([file.content]).size)}</small>
+              <button type="button" aria-expanded={openFile===`${t.id}:${file.name}`} onClick={() => setOpenFile(openFile===`${t.id}:${file.name}` ? undefined : `${t.id}:${file.name}`)}>{openFile===`${t.id}:${file.name}` ? 'Tutup' : 'Buka berkas'}</button>
+              {file.assetId ? <a className="chat-file-link" href={`/api/office${base}/assets/${file.assetId}/file`} download={file.name}>Unduh berkas</a> : <button type="button" onClick={() => downloadText(file.name,file.content)}>Unduh</button>}</div>
+            {openFile===`${t.id}:${file.name}` && <ChatArtifactReader name={file.name} content={file.content} base={base} assetId={file.assetId} onClose={()=>setOpenFile(undefined)}/>}
+          </div>)}</ChatArtifactGroup>{t.status==='failed' && <><button disabled={busy} onClick={() => void perform(() => officeRequest('POST',`${base}/tasks/${t.id}/retry`))}>Coba ulang</button><button type="button" className="chat-bubble-dismiss" onClick={()=>setDismissedTaskIds(prev=>new Set(prev).add(t.id))}>Sembunyikan</button></>}</div></div>
+        </div>)}<div ref={end}/>
+      </div>{showLatest&&<button className="chat-jump-latest" onClick={()=>{const area=end.current?.parentElement;if(area){area.scrollTo({top:area.scrollHeight,behavior:window.matchMedia?.('(prefers-reduced-motion: reduce)').matches?'auto':'smooth'});followLatest.current=true;setShowLatest(false)}}}><ChatIcon name="down"/>Pesan terbaru</button>}{showProjects&&['content-creator','video-editor'].includes(agent.agentType)&&<ChatProjects onClose={()=>{setShowProjects(false);actionsMenu.current?.querySelector<HTMLElement>('summary')?.focus()}} base={agentBase} brand={brand.id} value={productionSource} onChange={setProductionSource} refresh={latestReply} disabled={busy||pending}/>}<form ref={composer} className="chat-input-bar" onSubmit={e => {e.preventDefault();send()}}><ProductionSourceChip base={agentBase} value={productionSource} onChoose={()=>setShowProjects(true)} onClear={()=>setProductionSource('')} disabled={busy||pending}/><textarea ref={messageField} rows={1} aria-label="Pesan untuk agent" placeholder={`Pesan untuk ${name}…`} maxLength={12000} value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => {if(e.key==='Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {e.preventDefault(); if(!pending) send()} }}/><ChatWorkspaceTools base={agentBase} value={selection} onChange={setSelection} disabled={busy||pending} onUploading={setUploading}/><button className="chat-send-button" aria-label={busy ? 'Mengirim…' : pending ? 'Menunggu jawaban' : delegate ? 'Delegasikan' : 'Kirim pesan'} title={pending ? 'Menunggu jawaban' : delegate ? 'Delegasikan ke tim' : 'Kirim pesan (Enter)'} disabled={busy || uploading || pending || !ready || !input.trim()}><ChatIcon name="send"/></button></form></div>}
+      {tab==='Tugas' && <div className="agent-workspace-tab">{['content-creator','video-editor'].includes(agent.agentType)&&<AgentProduction base={agentBase} agent={agent.agentType} onChat={()=>setTab('Chat')} onCreated={()=>void reload()} onFiles={()=>setTab('Folder')}/>}<OfficeTaskForm expanded={initialTab==='Tugas'} brand={brand.id} agent={agent.agentType} disabled={busy || !ready} submit={perform}/>{ready && <AgentTaskList tasks={tasks} busy={busy} perform={perform} base={base}/>}</div>}
+      {tab==='Approval' && <div className="agent-approval-tab">{ready&&<ApprovalWorkspace approvals={approvals} onReload={reload}/>}</div>}
+      {tab==='Folder' && <AgentFolder brand={brand.id} agent={agent.agentType}/>}
+      {tab==='Memori & Rules' && <AgentMemoryWorkspace brand={brand.id} agent={agent.agentType} name={name} base={agentBase}/>}
+
+    </div>
+  </dialog>
+}

@@ -1,124 +1,105 @@
-import { useEffect, useState } from 'react'
-import { LOCKED_EVENT } from '../access.ts'
-import { formatBytes, formatDateTime } from '../format.ts'
+import { useState } from 'react'
+import { FileCard, FolderCard, PreviewDialog } from '../components/FileGallery.tsx'
+import { KIND_LABELS, KINDS, NO_FILTERS, PERIOD_LABELS, SORT_LABELS, fileKind, filterAssets, type Filters, type Period, type SortKey } from '../folder-filters.ts'
+import { formatDateTime } from '../format.ts'
+import { FLOOR_ORDER } from '../office3d/building.ts'
+import { AGENT_NAMES, type AssetItem, type OfficeAssets } from '../office-api.ts'
 import { usePolling } from '../polling.ts'
-import type { RequestState } from '../request-state.ts'
-import type { FolderAgent, FolderAgentsSnapshot, FolderFile, FolderListing } from '../types.ts'
-import { EmptyState, LoadingState, PageTitle, SearchInput, SourceStatus, Unavailable } from '../ui.tsx'
-import { PixelCharacter } from './Office.tsx'
-import { PrivateGate } from '../ProfileLock.tsx'
-import { agentPrivacy, useProfileLock } from '../profile-lock.ts'
+import { EmptyState, LoadingState, PageTitle, SearchInput } from '../ui.tsx'
 
-function folderUrl(agent: string, kind: 'list' | 'file', path: string): string {
-  return `/api/folders/${encodeURIComponent(agent)}/${kind}?path=${encodeURIComponent(path)}`
+type View = 'grid' | 'list'
+
+function savedView(): View {
+  try { return localStorage.getItem('folders-view') === 'list' ? 'list' : 'grid' } catch { return 'grid' }
 }
 
-type FolderRequest<T> = RequestState<T> & { error?: string; reload: () => void }
+const agentName = (agent: string) => AGENT_NAMES[agent] ?? agent
 
-/** Like loadSnapshot, but keeps the server's explanation (permission denied, not found…). */
-async function loadWithReason<T>(url: string): Promise<RequestState<T> & { error?: string }> {
-  try {
-    const response = await fetch(url)
-    const body = await response.json().catch(() => undefined) as (T & { error?: unknown; locked?: unknown }) | undefined
-    if (response.ok && body) return { status: 'ready', data: body }
-    if (response.status === 401 && body?.locked === true) window.dispatchEvent(new Event(LOCKED_EVENT))
-    return { status: 'failed', error: typeof body?.error === 'string' ? body.error : `Request failed (HTTP ${response.status}).` }
-  } catch {
-    return { status: 'failed', error: 'The Ruang API could not be reached.' }
-  }
-}
-
-function useRequest<T>(url: string | undefined): FolderRequest<T> {
-  const [state, setState] = useState<RequestState<T> & { error?: string }>({ status: 'pending' })
-  const [nonce, setNonce] = useState(0)
-  useEffect(() => {
-    if (!url) return
-    let active = true
-    setState({ status: 'pending' })
-    void loadWithReason<T>(url).then((next) => { if (active) setState(next) })
-    return () => { active = false }
-  }, [url, nonce])
-  return { ...state, reload: () => setNonce((value) => value + 1) } as FolderRequest<T>
-}
-
-function FileViewer({ agent, path }: { agent: string; path: string }) {
-  const file = useRequest<FolderFile>(folderUrl(agent, 'file', path))
-  if (file.status === 'pending') return <LoadingState message={`Opening ${path}...`}/>
-  if (file.status === 'failed') return <EmptyState title="Cannot open file">{file.error ?? 'The file could not be read.'}</EmptyState>
-  const data = file.data
-  return <section className="file-viewer" aria-label={`Contents of ${data.path}`}>
-    <header className="file-head"><div><p className="eyebrow">FILE</p><h2>{data.path.split('/').pop()}</h2></div><dl><div><dt>Size</dt><dd>{formatBytes(data.size)}</dd></div><div><dt>Modified</dt><dd>{formatDateTime(data.modified)}</dd></div></dl></header>
-    {data.kind === 'sensitive' ? <div className="file-notice locked">🔒 This file can hold credentials (keys, tokens, auth or database state). Ruang lists it but never reads its contents.</div>
-      : data.kind === 'binary' ? <div className="file-notice">Binary file. No text preview.</div>
-        : <>
-          {data.truncated && <div className="file-notice">Showing the first 256 KB of this file.</div>}
-          {!!data.redactions && <div className="file-notice">{data.redactions} line{data.redactions === 1 ? '' : 's'} had secrets masked as [redacted].</div>}
-          <pre className="file-content" tabIndex={0}>{data.content || <span className="muted">(empty file)</span>}</pre>
-        </>}
-  </section>
-}
-
-function Browser({ agent, onBack }: { agent: FolderAgent; onBack?: () => void }) {
-  const [directory, setDirectory] = useState('')
-  const [selected, setSelected] = useState<string | undefined>()
-  const [query, setQuery] = useState('')
-  const listing = useRequest<FolderListing>(folderUrl(agent.profile, 'list', directory))
-  const parts = directory ? directory.split('/') : []
-  const open = (next: string) => { setDirectory(next); setSelected(undefined); setQuery('') }
-  const needle = query.trim().toLowerCase()
-  const entries = listing.status === 'ready' ? listing.data.entries.filter((entry) => !needle || entry.name.toLowerCase().includes(needle)) : []
-  return <>
-    <nav className="breadcrumb" aria-label="Folder path">
-      {onBack && <><button type="button" onClick={onBack}>All agents</button><span>/</span></>}
-      <button type="button" onClick={() => open('')} aria-current={!directory ? 'page' : undefined} title={agent.path}>{agent.label} <small>{agent.path}</small></button>
-      {parts.map((part, index) => <span key={index} className="crumb"><span>/</span><button type="button" onClick={() => open(parts.slice(0, index + 1).join('/'))} aria-current={index === parts.length - 1 ? 'page' : undefined}>{part}</button></span>)}
-      <button type="button" className="refresh-button crumb-refresh" onClick={listing.reload}>↻ REFRESH</button>
-    </nav>
-    <section className="folder-browser">
-      <div className="file-list-pane">
-        <SearchInput value={query} onChange={setQuery} label="Filter this folder"/>
-        {listing.status === 'pending' ? <p className="muted">Loading folder...</p> : listing.status === 'failed' ? <div className="file-notice locked" role="alert"><strong>This folder could not be read.</strong><br/>{listing.error}</div> : <>
-          <ul className="file-list" aria-label="Folder contents">
-            {directory && <li><button type="button" className="file-row" onClick={() => open(parts.slice(0, -1).join('/'))}><span className="file-icon">↰</span><span className="file-name">..</span></button></li>}
-            {entries.map((entry) => <li key={entry.path}><button type="button" className={`file-row${selected === entry.path ? ' active' : ''}`} aria-current={selected === entry.path ? 'true' : undefined} onClick={() => entry.type === 'dir' ? open(entry.path) : setSelected(entry.path)}>
-              <span className="file-icon" aria-hidden="true">{entry.unreadable ? '⛔' : entry.type === 'dir' ? '📁' : entry.sensitive ? '🔒' : '📄'}</span>
-              <span className="file-name">{entry.name}</span>
-              <span className="file-size">{entry.unreadable ? 'no access' : entry.type === 'dir' ? '' : formatBytes(entry.size)}</span>
-            </button></li>)}
-          </ul>
-          {entries.length === 0 && <p className="muted">{needle ? 'No matching files.' : 'This folder is empty.'}</p>}
-          {listing.data.truncated && <p className="muted">Showing the first 500 entries.</p>}
-          {listing.data.hiddenCount > 0 && <p className="muted small-note">{listing.data.hiddenCount} system folder{listing.data.hiddenCount === 1 ? '' : 's'} hidden (other profiles, install, caches).</p>}
-        </>}
-      </div>
-      <div className="file-view-pane">{selected ? <FileViewer agent={agent.profile} path={selected}/> : <EmptyState title="Select a file">Pick a file on the left to view it. Folders open in place.</EmptyState>}</div>
-    </section>
-  </>
-}
-
-/** One agent's folder browser, for the Office agent dialog. */
-export function AgentFolder({ profile }: { profile: string }) {
-  const snapshot = usePolling<FolderAgentsSnapshot>('/api/folders', 60_000)
-  const agent = snapshot.status === 'ready' ? snapshot.data.agents.find((item) => item.profile === profile) : undefined
-  if (snapshot.status === 'pending') return <LoadingState message="Finding the agent folder..."/>
-  if (snapshot.status === 'failed') return <EmptyState title="Not Available">{snapshot.message ?? 'The folder list could not be read.'}</EmptyState>
-  if (!agent || !agent.available) return <EmptyState title="Folder not available">{agent?.reason ?? 'This agent has no readable folder.'}</EmptyState>
-  return <div className="embedded-folder"><PrivateGate agent={agent.profile} compact>{agent.warning && <p className="file-notice">⚠ {agent.warning}</p>}<Browser key={agent.profile} agent={agent}/></PrivateGate></div>
-}
-
+/** Results agents saved, browsed like a drive: brand folders, then agent folders, then the files as page cards. */
 export function Folders() {
-  const snapshot = usePolling<FolderAgentsSnapshot>('/api/folders', 60_000)
-  const [openAgent, setOpenAgent] = useState<string | undefined>()
-  const lock = useProfileLock()
-  const data = snapshot.status === 'ready' ? snapshot.data : undefined
-  const agent = data?.agents.find((item) => item.profile === openAgent)
-  const source = data ? { availability: 'available' as const, data: null } : undefined
-  return <><PageTitle eyebrow="AGENT FOLDERS" title="Folders">Each agent's own folder, read-only: its Hermes profile folder (SOUL.md, memories, skills, cron, config…) or, for OpenCode, its home folder. Every agent only shows its own files. Credential files are listed but never opened.</PageTitle>
-    {!agent && <SourceStatus source={source} fetchedAt={data?.fetchedAt} request={snapshot}/>}
-    <Unavailable source={source} request={snapshot}/>
-    {snapshot.status === 'pending' ? <LoadingState message="Finding agent folders..."/> : agent ? <><PrivateGate agent={agent.profile}><Browser key={agent.profile} agent={agent} onBack={() => setOpenAgent(undefined)}/></PrivateGate>{agentPrivacy(lock, agent.profile) === 'locked' && <button type="button" className="refresh-button" onClick={() => setOpenAgent(undefined)}>← ALL AGENTS</button>}</> : data && <section className="folder-agents">{data.agents.map((item) => <button type="button" key={item.profile} className="folder-agent" disabled={!item.available} onClick={() => setOpenAgent(item.profile)}>
-      <span className="folder-glyph" aria-hidden="true"><PixelCharacter agent={item.profile}/></span>
-      <span className="folder-meta"><strong>{agentPrivacy(lock, item.profile) === 'locked' && '🔒 '}{item.label}</strong><code className="folder-path">{item.path}</code><small>{item.available ? 'Open folder →' : item.reason ?? 'Folder not available'}</small>{item.warning && <small className="text-bad">⚠ {item.warning}</small>}</span>
-    </button>)}</section>}
+  const data = usePolling<OfficeAssets>('/api/office/assets', 30_000)
+  const [filters, setFilters] = useState<Filters>(NO_FILTERS)
+  const [selected, setSelected] = useState<AssetItem>()
+  const [view, setView] = useState<View>(savedView)
+  const [page,setPage]=useState(1)
+  const [pageSize,setPageSize]=useState(24)
+  if (data.status === 'pending') return <><PageTitle eyebrow="FOLDERS" title="Folders"/><LoadingState message="Memuat hasil kerja..."/></>
+  if (data.status === 'failed') return <><PageTitle eyebrow="FOLDERS" title="Folders"/><EmptyState title="Tidak tersedia">Hasil kerja belum dapat dimuat. {data.message}</EmptyState></>
+
+  const { assets } = data.data
+  const now = Date.now()
+  const set = (patch: Partial<Filters>) => {setPage(1);setFilters((current) => ({ ...current, ...patch }))}
+  const chooseView = (next: View) => { setView(next); try { localStorage.setItem('folders-view', next) } catch { /* the choice just is not remembered */ } }
+
+  const brands = [...new Map(assets.map((asset) => [asset.brandId, asset.brandName])).entries()].sort(([a], [b]) => FLOOR_ORDER.indexOf(a) - FLOOR_ORDER.indexOf(b))
+  const latest = new Map<string, number>()
+  for (const asset of assets) latest.set(asset.taskId, Math.max(latest.get(asset.taskId) ?? 0, asset.version))
+
+  // The folder path is the brand and agent filters; search, kind and period turn the page into a flat list of matches.
+  const searching = filters.query.trim() !== '' || filters.kind !== 'all' || filters.period !== 'all'
+  const inBrand = assets.filter((asset) => filters.brand === 'all' || asset.brandId === filters.brand)
+  const folders: { key: string; title: string; count: number; note?: string; open: () => void }[] = []
+  if (!searching && filters.brand === 'all') {
+    for (const [id, name] of brands) {
+      const own = assets.filter((asset) => asset.brandId === id)
+      folders.push({ key: id, title: name, count: own.length, note: `terakhir ${formatDateTime(own.map((asset) => asset.createdAt).sort().at(-1))}`, open: () => set({ brand: id, agent: 'all' }) })
+    }
+  } else if (!searching && filters.agent === 'all') {
+    const byAgent = new Map<string, number>()
+    for (const asset of inBrand) byAgent.set(asset.agentType, (byAgent.get(asset.agentType) ?? 0) + 1)
+    for (const [agent, count] of [...byAgent].sort(([a], [b]) => agentName(a).localeCompare(agentName(b)))) folders.push({ key: agent, title: agentName(agent), count, open: () => set({ agent }) })
+  }
+  const withoutKind = filterAssets(assets, filters, now, 'kind')
+  const matches = filterAssets(assets, filters, now)
+  const pages=Math.max(1,Math.ceil(matches.length/pageSize))
+  const currentPage=Math.min(page,pages)
+  const start=(currentPage-1)*pageSize
+  const files = matches.slice(start,start+pageSize)
+  const brandName = brands.find(([id]) => id === filters.brand)?.[1]
+  const reset = () => {setPage(1);setFilters({ ...NO_FILTERS, sort: filters.sort })}
+
+  return <>
+    <PageTitle eyebrow="FOLDERS" title="Folders">Temukan hasil kerja agent, lihat pratinjau, dan unduh berkas per brand.</PageTitle>
+    {assets.length === 0 ? <EmptyState title="Belum ada hasil">Hasil muncul setelah agent menyelesaikan tugas.</EmptyState> : <div className="fb">
+      <div className="fb-bar">
+        <nav className="fb-crumbs" aria-label="Lokasi folder">
+          <ol>
+            <li>{filters.brand === 'all' ? <b aria-current="page">Folders</b> : <button type="button" onClick={() => set({ brand: 'all', agent: 'all' })}>Folders</button>}</li>
+            {filters.brand !== 'all' && <li>{filters.agent === 'all' ? <b aria-current="page">{brandName}</b> : <button type="button" onClick={() => set({ agent: 'all' })}>{brandName}</button>}</li>}
+            {filters.brand !== 'all' && filters.agent !== 'all' && <li><b aria-current="page">{agentName(filters.agent)}</b></li>}
+          </ol>
+        </nav>
+        <SearchInput value={filters.query} onChange={(query) => set({ query })} label="Cari di semua folder"/>
+      </div>
+      <div className="fb-filters">
+        <div className="fb-kinds" role="group" aria-label="Jenis berkas">
+          <button type="button" className="fb-chip" aria-pressed={filters.kind === 'all'} onClick={() => set({ kind: 'all' })}>Semua <b>{withoutKind.length}</b></button>
+          {KINDS.map((kind) => { const count = withoutKind.filter((asset) => fileKind(asset) === kind).length; return count > 0 || filters.kind === kind ? <button type="button" className="fb-chip" key={kind} aria-pressed={filters.kind === kind} onClick={() => set({ kind })}>{KIND_LABELS[kind]} <b>{count}</b></button> : null })}
+        </div>
+        <div className="fb-controls">
+          <label>Periode <select value={filters.period} onChange={(event) => set({ period: event.target.value as Period })}>{(Object.keys(PERIOD_LABELS) as Period[]).map((period) => <option key={period} value={period}>{PERIOD_LABELS[period]}</option>)}</select></label>
+          <label>Urutkan <select value={filters.sort} onChange={(event) => set({ sort: event.target.value as SortKey })}>{(Object.keys(SORT_LABELS) as SortKey[]).map((sort) => <option key={sort} value={sort}>{SORT_LABELS[sort]}</option>)}</select></label>
+          {(searching || filters.brand !== 'all') && <button type="button" className="refresh-button" onClick={reset}>Reset</button>}
+          <div className="fb-views" role="group" aria-label="Tampilan">
+            <button type="button" aria-pressed={view === 'grid'} onClick={() => chooseView('grid')}>Kartu</button>
+            <button type="button" aria-pressed={view === 'list'} onClick={() => chooseView('list')}>Daftar</button>
+          </div>
+        </div>
+      </div>
+
+      {folders.length > 0 && <section aria-label="Folder">
+        <h2 className="fb-heading">Folder</h2>
+        <div className="fb-folders">{folders.map((folder) => <FolderCard key={folder.key} title={folder.title} count={folder.count} note={folder.note} onOpen={folder.open}/>)}</div>
+      </section>}
+
+      <section aria-label="Berkas">
+        <h2 className="fb-heading">{searching ? 'Hasil pencarian' : 'Semua berkas'} <small role="status">{matches.length?`${start+1}–${start+files.length} dari ${matches.length} berkas`:'0 berkas'}</small></h2>
+        {files.length === 0
+          ? <p className="fb-empty">{searching ? 'Tidak ada berkas yang cocok.' : 'Folder ini belum berisi berkas.'}{searching && <> <button type="button" className="refresh-button" onClick={reset}>Reset filter</button></>}</p>
+          : <div className={`fb-grid${view === 'list' ? ' list' : ''}`}>{files.map((asset) => <FileCard key={asset.id} asset={asset} showBrand={filters.brand === 'all'} latest={latest.get(asset.taskId) === asset.version} selected={selected?.id === asset.id} onOpen={() => setSelected(asset)}/>)}</div>}
+        {matches.length>0&&<nav className="fb-pagination" aria-label="Halaman berkas"><label>Berkas per halaman<select value={pageSize} onChange={e=>{setPageSize(Number(e.target.value));setPage(1)}}>{[12,24,48].map(n=><option key={n} value={n}>{n}</option>)}</select></label><div><button type="button" className="refresh-button" disabled={currentPage===1} onClick={()=>setPage(currentPage-1)}>Sebelumnya</button><span aria-live="polite">Halaman {currentPage} dari {pages}</span><button type="button" className="refresh-button" disabled={currentPage===pages} onClick={()=>setPage(currentPage+1)}>Berikutnya</button></div></nav>}
+      </section>
+    </div>}
+    {selected && <PreviewDialog key={selected.id} asset={selected} onClose={() => setSelected(undefined)} onChanged={data.refresh}/>}
   </>
 }

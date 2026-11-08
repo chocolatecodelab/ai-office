@@ -1,0 +1,23 @@
+{
+  "brand": "Official OTCA",
+  "slug": "otca",
+  "active_agents": [
+    "manager",
+    "content-creator",
+    "video-editor",
+    "social-media-manager",
+    "digital-marketing",
+    "event-specialist"
+  ],
+  "platforms": [
+    "Instagram",
+    "Facebook",
+    "TikTok",
+    "YouTube Shorts"
+  ],
+  "budget_soft_cap_usd": {
+    "pool_umum": 5,
+    "pool_video": 5,
+    "pool_gambar": 4
+  }
+}
