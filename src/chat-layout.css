@@ -32,6 +32,14 @@ dialog.office-agent-panel[open].is-expanded,dialog.office-agent-panel.embedded[o
 .office-agent-panel .office-chat-utilities .manager-chat-mode{display:flex;padding:10px 0;margin:0}
 .office-agent-panel.is-chat .chat-messages-area{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:20px clamp(4px,3vw,36px) 16px;scrollbar-gutter:stable;overscroll-behavior:contain}
 .office-agent-panel .chat-messages-area>.chat-turn{max-width:800px;margin:0 auto 24px}
+.office-agent-panel .chat-load-older{display:flex;align-items:center;justify-content:center;gap:8px;max-width:800px;margin:0 auto 20px;padding:8px 12px;background:var(--surface-2);border:1px dashed var(--border);border-radius:10px;font-size:12px;flex-wrap:wrap}
+.office-agent-panel .chat-load-older button{background:transparent;border:1px solid var(--border);border-radius:6px;padding:6px 14px;color:inherit;font-size:12px;font-weight:500;cursor:pointer;transition:all .15s ease}
+.office-agent-panel .chat-load-older button:hover{background:var(--surface);border-color:var(--accent)}
+.office-agent-panel .chat-session-banner{display:flex;align-items:center;justify-content:space-between;gap:12px;max-width:800px;margin:0 auto 16px;padding:8px 14px;background:var(--surface-2);border-left:3px solid var(--accent);border-radius:6px;font-size:12px}
+.office-agent-panel .chat-session-banner button{background:transparent;border:1px solid var(--border);border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer}
+.office-agent-panel .chat-session-banner button:hover{background:var(--surface);border-color:var(--accent)}
+.office-agent-panel .chat-bubble-dismiss{margin-left:8px;opacity:0.75;font-size:11px;cursor:pointer;background:transparent;border:0;text-decoration:underline;color:inherit;padding:2px 4px}
+.office-agent-panel .chat-bubble-dismiss:hover{opacity:1;color:var(--error,#ff5252)}
 .office-agent-panel.is-chat .chat-turn .agent-bubble{width:100%;max-width:100%;padding:8px 0 12px;background:transparent;border:0;border-radius:0}
 .office-agent-panel.is-chat .chat-turn .agent-bubble .bubble-content>.readable-markdown{max-width:76ch}
 .office-agent-panel.is-chat .chat-turn .user-bubble{max-width:min(78%,66ch);border-radius:16px 16px 4px 16px;padding:10px 14px}

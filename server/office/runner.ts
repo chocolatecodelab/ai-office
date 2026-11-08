@@ -217,6 +217,26 @@ async function runTaskOnce(deps: RunnerDeps, brandId: string, taskId: string): P
     }
     let historyMetrics:Record<string,unknown>={}
     if (task.kind === 'konten.chat') {
+      const isCompactCmd = /^\/(compact|ringkas)\b/i.test(task.brief.trim())
+      if (isCompactCmd && deps.chat && endpoint) {
+        try {
+          await compactChat(deps.chat, task, hermes, endpoint, route, { force: true })
+          const mem = await deps.chat.memory(brandId, task.agentType)
+          const reply = `✅ **Konteks percakapan berhasil dipadatkan (compacted)!**\n\n${mem.summary ? `**Ringkasan memori tersimpan:**\n${mem.summary}` : 'Seluruh percakapan telah ditinjau; belum ada detail percakapan lama yang perlu diringkas.'}`
+          await store.completeChat(brandId, taskId, {
+            content: reply,
+            runId: `compact-${taskId}`,
+            source: route.source,
+            model: route.model ?? 'system',
+            inputTokens: 0,
+            outputTokens: 0,
+            durationMs: 0
+          })
+          return { next: 'none' }
+        } catch (e) {
+          console.warn(`Compact command gagal:`, e)
+        }
+      }
       const history = (await store.tasks(brandId)).filter(item => item.brandId === brandId && item.agentType === task.agentType && item.kind === 'konten.chat' && item.id !== task.id && item.createdAt < task.createdAt && item.result).slice(0,50)
       const historyBudget=Number(process.env.OFFICE_CHAT_HISTORY_CHARS??12000)
       if(!Number.isSafeInteger(historyBudget)||historyBudget<1000||historyBudget>100000)throw new Error('OFFICE_CHAT_HISTORY_CHARS harus 1000–100000.')

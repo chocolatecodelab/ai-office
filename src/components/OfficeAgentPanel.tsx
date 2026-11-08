@@ -67,6 +67,15 @@ export function OfficeAgentPanel({ brand, agent, onClose, embedded = false, init
   const [ready,setReady] = useState(false)
   const [importing,setImporting] = useState(false)
   const [openFile,setOpenFile] = useState<string>()
+  const sessionKey = `office-chat-session:${brand.id}:${agent.agentType}`
+  const [sessionCutoff,setSessionCutoff] = useState<string>(() => {
+    try { return localStorage.getItem(sessionKey) ?? '' } catch { return '' }
+  })
+  const [showArchive,setShowArchive] = useState(false)
+  const [visibleLimit,setVisibleLimit] = useState(20)
+  const [dismissedTaskIds,setDismissedTaskIds] = useState<Set<string>>(() => new Set())
+  const [compacting,setCompacting] = useState(false)
+  const [compactNotice,setCompactNotice] = useState('')
   const actionLock=useRef(false)
   const active = useRef(true)
   const generation = useRef(0)
@@ -112,6 +121,45 @@ export function OfficeAgentPanel({ brand, agent, onClose, embedded = false, init
   }
   const chats=tasks.filter(t => t.kind === 'konten.chat').slice().reverse()
   const pending=chats.some(t => ['queued','running','waiting_quota','revision'].includes(t.status))
+  const sessionChats=(sessionCutoff && !showArchive)
+    ? chats.filter(t => t.createdAt >= sessionCutoff)
+    : chats
+  const visibleTurnList=sessionChats.filter(t => !(t.status==='failed' && dismissedTaskIds.has(t.id)))
+  const totalInView=visibleTurnList.length
+  const visibleChats=visibleTurnList.slice(Math.max(0, totalInView - visibleLimit))
+  const hiddenCount=Math.max(0, totalInView - visibleLimit)
+  const startNewSession = () => {
+    if (chats.length > 0 && !window.confirm('Mulai percakapan baru? Pesan terdahulu akan diarsipkan dan tetap dapat diakses melalui opsi "Lihat arsip pesan lama".')) return
+    const now = new Date().toISOString()
+    try { localStorage.setItem(sessionKey, now) } catch {}
+    setSessionCutoff(now)
+    setShowArchive(false)
+    setVisibleLimit(20)
+    if (actionsMenu.current) actionsMenu.current.open = false
+  }
+  const toggleArchive = () => {
+    setShowArchive(v => !v)
+    if (actionsMenu.current) actionsMenu.current.open = false
+  }
+  const triggerCompaction = async () => {
+    if (compacting || busy) return
+    setCompacting(true)
+    setCompactNotice('Meringkas konteks percakapan…')
+    try {
+      const res = await officeRequest<{ compacted: boolean; summary?: string; message?: string }>('POST', `${agentBase}/compact-memory`)
+      if (res.compacted) {
+        setCompactNotice(`Konteks percakapan berhasil dipadatkan (${res.summary?.length ?? 0} karakter ringkasan).`)
+        await reload()
+      } else {
+        setCompactNotice(res.message || 'Belum ada percakapan untuk diringkas.')
+      }
+    } catch (e) {
+      setCompactNotice(`Gagal meringkas: ${String(e)}`)
+    } finally {
+      setCompacting(false)
+      setTimeout(() => setCompactNotice(''), 6000)
+    }
+  }
   const exportChat = () => {
     const data=chats.flatMap(t => [{role:'user',content:t.brief,timestamp:t.createdAt},...(t.result ? [{role:'assistant',content:t.result,timestamp:t.updatedAt}] : [])])
     const url=URL.createObjectURL(new Blob([JSON.stringify({brand:brand.id,agent:agent.agentType,messages:data},null,2)],{type:'application/json'}))
@@ -119,14 +167,17 @@ export function OfficeAgentPanel({ brand, agent, onClose, embedded = false, init
     setTimeout(()=>URL.revokeObjectURL(url),1000)
   }
   return <dialog open={embedded || undefined} onKeyDown={e=>{if(e.key==='Escape')onClose()}} ref={dialog} aria-label={`${name} · ${brand.name}`} className={`office-agent-panel${tab==='Chat' ? ' is-chat' : ''}${embedded ? ' embedded' : ''}${expanded ? ' is-expanded' : ''}`} onCancel={e=>{if(e.target!==e.currentTarget)return;e.preventDefault();onClose()}} onClick={e => { if(e.target===e.currentTarget) onClose() }}>
-    <header className="office-panel-heading"><PixelCharacter agent={`${brand.id}/${agent.agentType}`}/><div className="chat-agent-identity"><h2 title={name}>{name}</h2><div className="chat-agent-meta"><small>{brand.name}</small><span data-status={agent.status}>{AGENT_STATUS_LABELS[agent.status]}</span></div></div><div className="chat-window-actions"><button className="panel-expand-control" aria-label={expanded ? "Kembalikan ukuran panel" : "Perbesar ruang percakapan"} title={expanded ? "Kembalikan ukuran panel" : "Perbesar ruang percakapan"} aria-pressed={expanded} onClick={()=>setExpanded(v=>!v)}><ChatIcon name={expanded ? "collapse" : "expand"}/></button>{tab==='Chat'&&<details ref={actionsMenu} className="chat-header-menu" onKeyDown={e=>{if(e.key==='Escape'){e.preventDefault();e.stopPropagation();if(actionsMenu.current){actionsMenu.current.open=false;actionsMenu.current.querySelector<HTMLElement>('summary')?.focus()}}}}><summary aria-label="Menu percakapan" title="Menu percakapan"><ChatIcon name="more"/></summary><div>{['content-creator','video-editor'].includes(agent.agentType)&&<><button onClick={()=>{setShowProjects(true);if(actionsMenu.current)actionsMenu.current.open=false}}>Proyek dan versi{productionSource?' (sumber dipilih)':''}</button>{productionSource&&<button onClick={()=>{setProductionSource('');if(actionsMenu.current)actionsMenu.current.open=false}}>Lepas sumber revisi</button>}</>}<button onClick={()=>{setImporting(v=>!v);if(actionsMenu.current)actionsMenu.current.open=false}}>Impor percakapan</button><button disabled={!chats.length} onClick={()=>{exportChat();if(actionsMenu.current)actionsMenu.current.open=false}}>Ekspor percakapan</button></div></details>}<button autoFocus onClick={onClose} aria-label="Tutup panel agent"><ChatIcon name="close"/></button></div></header>
+    <header className="office-panel-heading"><PixelCharacter agent={`${brand.id}/${agent.agentType}`}/><div className="chat-agent-identity"><h2 title={name}>{name}</h2><div className="chat-agent-meta"><small>{brand.name}</small><span data-status={agent.status}>{AGENT_STATUS_LABELS[agent.status]}</span></div></div><div className="chat-window-actions"><button className="panel-expand-control" aria-label={expanded ? "Kembalikan ukuran panel" : "Perbesar ruang percakapan"} title={expanded ? "Kembalikan ukuran panel" : "Perbesar ruang percakapan"} aria-pressed={expanded} onClick={()=>setExpanded(v=>!v)}><ChatIcon name={expanded ? "collapse" : "expand"}/></button>{tab==='Chat'&&<details ref={actionsMenu} className="chat-header-menu" onKeyDown={e=>{if(e.key==='Escape'){e.preventDefault();e.stopPropagation();if(actionsMenu.current){actionsMenu.current.open=false;actionsMenu.current.querySelector<HTMLElement>('summary')?.focus()}}}}><summary aria-label="Menu percakapan" title="Menu percakapan"><ChatIcon name="more"/></summary><div>{['content-creator','video-editor'].includes(agent.agentType)&&<><button onClick={()=>{setShowProjects(true);if(actionsMenu.current)actionsMenu.current.open=false}}>Proyek dan versi{productionSource?' (sumber dipilih)':''}</button>{productionSource&&<button onClick={()=>{setProductionSource('');if(actionsMenu.current)actionsMenu.current.open=false}}>Lepas sumber revisi</button>}</>}<button onClick={startNewSession}>Percakapan baru (Sesi baru)</button>{sessionCutoff&&<button onClick={toggleArchive}>{showArchive?'Kembali ke sesi aktif':'Lihat arsip pesan lama'}</button>}<button disabled={compacting||!chats.length} onClick={()=>{void triggerCompaction();if(actionsMenu.current)actionsMenu.current.open=false}}>{compacting?'Meringkas konteks…':'Ringkas konteks (Compact)'}</button><button onClick={()=>{setImporting(v=>!v);if(actionsMenu.current)actionsMenu.current.open=false}}>Impor percakapan</button><button disabled={!chats.length} onClick={()=>{exportChat();if(actionsMenu.current)actionsMenu.current.open=false}}>Ekspor percakapan</button></div></details>}<button autoFocus onClick={onClose} aria-label="Tutup panel agent"><ChatIcon name="close"/></button></div></header>
     <nav className="office-panel-tabs" aria-label="Detail agent">{TABS.map(t => <button key={t} aria-pressed={tab===t} onClick={() => setTab(t)}>{t==='Approval'?'Review':t}{t==='Approval' && approvals.filter(approvalPending).length>0 ? ` (${approvals.filter(approvalPending).length})` : ''}</button>)}</nav>
     {(error || loadError) && <p role="alert">{error || loadError} <button onClick={() => {setError('');void reload()}}>Coba lagi</button></p>}
     <div className="office-panel-content"><ChatDocumentProgress base={agentBase} active={tasks.some(t=>['running','queued','revision'].includes(t.status))}/>
       {!ready && <p>Memuat riwayat agent…</p>}
       {tab==='Chat' && <div className="office-conversation" style={{'--chat-composer-height':`${composerHeight}px`} as CSSProperties}><div className="office-chat-utilities">{agent.agentType==='manager'&&<label className="manager-chat-mode"><input type="checkbox" checked={delegate} onChange={e=>setDelegate(e.target.checked)}/> Delegasi tim <span className="chat-visually-hidden">Membuat tugas spesialis; progres tersedia di tab Tugas.</span></label>}{importing&&<p>Tempel riwayat ke kolom pesan (maksimal 12.000 karakter), lalu tinjau sebelum mengirim. <button onClick={()=>setImporting(false)}>Tutup panduan impor</button></p>}</div><div className="chat-messages-area" onScroll={e=>{const area=e.currentTarget;followLatest.current=area.scrollHeight-area.scrollTop-area.clientHeight<80;setShowLatest(!followLatest.current)}}>
-        {ready && chats.length===0 && <div className="chat-empty-hint"><h3>Halo, saya {name}.</h3><p>Diskusikan kebutuhan {brand.name} atau berikan brief. Hasil kerja tetap melalui approval.</p><button onClick={() => setInput('Apa yang bisa kamu bantu sesuai peran dan aturan brand ini?')}>Kenali peran agent</button></div>}
-        {chats.map((t,index) => <div key={t.id} className="chat-turn">{(index===0||new Date(chats[index-1].createdAt).toLocaleDateString()!==new Date(t.createdAt).toLocaleDateString())&&<div className="chat-day-marker"><span>{new Date(t.createdAt).toLocaleDateString('id-ID',{day:'numeric',month:'long',year:'numeric'})}</span></div>}
+        {sessionCutoff && showArchive && <div className="chat-session-banner"><span>📂 Menampilkan seluruh riwayat arsip ({sessionChats.length} pesan).</span><button type="button" onClick={()=>setShowArchive(false)}>Kembali ke sesi aktif</button></div>}
+        {compactNotice && <div className="chat-session-banner"><span>{compactNotice}</span><button type="button" onClick={()=>setCompactNotice('')}>✕</button></div>}
+        {hiddenCount>0 && <div className="chat-load-older"><button type="button" onClick={()=>setVisibleLimit(v=>v+20)}>↑ Muat {Math.min(20,hiddenCount)} pesan sebelumnya ({hiddenCount} tersisa)</button><button type="button" onClick={()=>setVisibleLimit(totalInView)}>Tampilkan semua ({totalInView})</button></div>}
+        {ready && visibleTurnList.length===0 && <div className="chat-empty-hint"><h3>Halo, saya {name}.</h3><p>{sessionCutoff && !showArchive ? 'Sesi percakapan baru dimulai. Diskusikan kebutuhan brand atau berikan brief baru.' : `Diskusikan kebutuhan ${brand.name} atau berikan brief. Hasil kerja tetap melalui approval.`}</p><div style={{display:'flex',gap:'8px',flexWrap:'wrap',justifyContent:'center'}}><button onClick={() => setInput('Apa yang bisa kamu bantu sesuai peran dan aturan brand ini?')}>Kenali peran agent</button>{sessionCutoff && !showArchive && chats.length>0 && <button type="button" onClick={()=>setShowArchive(true)}>Lihat arsip riwayat ({chats.length})</button>}</div></div>}
+        {visibleChats.map((t,index) => <div key={t.id} className="chat-turn">{(index===0||new Date(visibleChats[index-1].createdAt).toLocaleDateString()!==new Date(t.createdAt).toLocaleDateString())&&<div className="chat-day-marker"><span>{new Date(t.createdAt).toLocaleDateString('id-ID',{day:'numeric',month:'long',year:'numeric'})}</span></div>}
           <div className="chat-bubble-row user-row"><div className="chat-bubble user-bubble"><div className="bubble-content">{t.brief}</div><div className="bubble-footer"><span className="chat-visually-hidden">Anda · </span><time dateTime={t.createdAt} title={new Date(t.createdAt).toLocaleString('id-ID')}>{new Date(t.createdAt).toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'})}</time></div></div></div>
           <div className="chat-bubble-row agent-row"><div className="chat-bubble agent-bubble"><div className="bubble-header"><span>{name}</span>{t.status!=='done'&&<span className="chat-reply-status">{TASK_STATUS_LABELS[t.status]}</span>}</div><div className="bubble-content">{t.status==='failed'&&t.error ? t.error : (t.text ?? t.result) ? <ReadOnlyMarkdown text={(t.text ?? t.result)!}/> : t.error || (t.status==='running' ? 'Sedang menyusun jawaban…' : t.status==='waiting_quota' ? 'Menunggu kuota tersedia.' : 'Pesan masuk antrean.')}</div>{t.status==='waiting_quota'&&t.retryAt&&<p className="chat-quota-retry">Coba lagi otomatis: <time dateTime={t.retryAt}>{new Date(t.retryAt).toLocaleString('id-ID')}</time>. Server harus tetap aktif.</p>}
           {(t.artifacts??[]).some(file=>file.mime==='image/png')&&<div className="chat-rendered-gallery" aria-label="Gambar hasil produksi">{(t.artifacts??[]).filter(file=>file.mime==='image/png'&&file.assetId).sort((a,b)=>Number(a.name==='review.png')-Number(b.name==='review.png')||a.name.localeCompare(b.name)).map(file=><figure key={file.assetId}><a href={`/api/office${base}/assets/${file.assetId}/file?inline=1`} target="_blank" rel="noreferrer" aria-label={`Buka gambar ${file.name}`}><img loading="lazy" src={`/api/office${base}/assets/${file.assetId}/file?inline=1`} alt={file.name}/></a><figcaption><span>{file.name}</span><a href={`/api/office${base}/assets/${file.assetId}/file`} download={file.name}>Unduh</a></figcaption></figure>)}</div>}
@@ -136,7 +187,7 @@ export function OfficeAgentPanel({ brand, agent, onClose, embedded = false, init
               <button type="button" aria-expanded={openFile===`${t.id}:${file.name}`} onClick={() => setOpenFile(openFile===`${t.id}:${file.name}` ? undefined : `${t.id}:${file.name}`)}>{openFile===`${t.id}:${file.name}` ? 'Tutup' : 'Buka berkas'}</button>
               {file.assetId ? <a className="chat-file-link" href={`/api/office${base}/assets/${file.assetId}/file`} download={file.name}>Unduh berkas</a> : <button type="button" onClick={() => downloadText(file.name,file.content)}>Unduh</button>}</div>
             {openFile===`${t.id}:${file.name}` && <ChatArtifactReader name={file.name} content={file.content} base={base} assetId={file.assetId} onClose={()=>setOpenFile(undefined)}/>}
-          </div>)}</ChatArtifactGroup>{t.status==='failed' && <button disabled={busy} onClick={() => void perform(() => officeRequest('POST',`${base}/tasks/${t.id}/retry`))}>Coba ulang</button>}</div></div>
+          </div>)}</ChatArtifactGroup>{t.status==='failed' && <><button disabled={busy} onClick={() => void perform(() => officeRequest('POST',`${base}/tasks/${t.id}/retry`))}>Coba ulang</button><button type="button" className="chat-bubble-dismiss" onClick={()=>setDismissedTaskIds(prev=>new Set(prev).add(t.id))}>Sembunyikan</button></>}</div></div>
         </div>)}<div ref={end}/>
       </div>{showLatest&&<button className="chat-jump-latest" onClick={()=>{const area=end.current?.parentElement;if(area){area.scrollTo({top:area.scrollHeight,behavior:window.matchMedia?.('(prefers-reduced-motion: reduce)').matches?'auto':'smooth'});followLatest.current=true;setShowLatest(false)}}}><ChatIcon name="down"/>Pesan terbaru</button>}{showProjects&&['content-creator','video-editor'].includes(agent.agentType)&&<ChatProjects onClose={()=>{setShowProjects(false);actionsMenu.current?.querySelector<HTMLElement>('summary')?.focus()}} base={agentBase} brand={brand.id} value={productionSource} onChange={setProductionSource} refresh={latestReply} disabled={busy||pending}/>}<form ref={composer} className="chat-input-bar" onSubmit={e => {e.preventDefault();send()}}><ProductionSourceChip base={agentBase} value={productionSource} onChoose={()=>setShowProjects(true)} onClear={()=>setProductionSource('')} disabled={busy||pending}/><textarea ref={messageField} rows={1} aria-label="Pesan untuk agent" placeholder={`Pesan untuk ${name}…`} maxLength={12000} value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => {if(e.key==='Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {e.preventDefault(); if(!pending) send()} }}/><ChatWorkspaceTools base={agentBase} value={selection} onChange={setSelection} disabled={busy||pending} onUploading={setUploading}/><button className="chat-send-button" aria-label={busy ? 'Mengirim…' : pending ? 'Menunggu jawaban' : delegate ? 'Delegasikan' : 'Kirim pesan'} title={pending ? 'Menunggu jawaban' : delegate ? 'Delegasikan ke tim' : 'Kirim pesan (Enter)'} disabled={busy || uploading || pending || !ready || !input.trim()}><ChatIcon name="send"/></button></form></div>}
       {tab==='Tugas' && <div className="agent-workspace-tab">{['content-creator','video-editor'].includes(agent.agentType)&&<AgentProduction base={agentBase} agent={agent.agentType} onChat={()=>setTab('Chat')} onCreated={()=>void reload()} onFiles={()=>setTab('Folder')}/>}<OfficeTaskForm expanded={initialTab==='Tugas'} brand={brand.id} agent={agent.agentType} disabled={busy || !ready} submit={perform}/>{ready && <AgentTaskList tasks={tasks} busy={busy} perform={perform} base={base}/>}</div>}

@@ -79,3 +79,55 @@ it('expands an inline workspace without losing the draft or attachment panel, th
     expect(onClose).not.toHaveBeenCalled()
   }finally{await act(async()=>root.unmount());host.remove();vi.unstubAllGlobals()}
 })
+
+it('windows chat messages to 20 by default and allows loading older messages or starting a new session',async()=>{
+  vi.stubGlobal('WebSocket',class{close(){}})
+  HTMLDialogElement.prototype.showModal=function(){this.open=true}
+  HTMLDialogElement.prototype.close=function(){this.open=false}
+  HTMLDialogElement.prototype.show=function(){this.open=true}
+  const tasks:OfficeTask[]=Array.from({length:25},(_,i)=>({
+    id:`msg-${i}`,
+    agentType:'video-editor',
+    kind:'konten.chat',
+    brief:`Brief ${i+1}`,
+    result:`Result ${i+1}`,
+    status:'done',
+    createdAt:new Date(Date.now() - (25-i)*60000).toISOString()
+  } as OfficeTask))
+  vi.stubGlobal('fetch',vi.fn(async(path:string)=>new Response(JSON.stringify(path.endsWith('/tasks')?tasks:[]))))
+  vi.stubGlobal('confirm',vi.fn(()=>true))
+  const onClose=vi.fn(),host=document.body.appendChild(document.createElement('div')),root=createRoot(host)
+  const agent={brandId:'otca',agentType:'video-editor',status:'idle',active:true} as OfficeAgent
+  const brand={id:'otca',name:'Official OTCA',agents:[agent]} as OfficeBrand
+  try{
+    await act(async()=>root.render(<OfficeAgentPanel brand={brand} agent={agent} onClose={onClose}/>))
+    // Total 25 chats, default visibleLimit is 20 -> 5 hidden
+    const loadOlder=host.querySelector<HTMLDivElement>('.chat-load-older')
+    expect(loadOlder).not.toBeNull()
+    expect(loadOlder?.textContent).toContain('Muat 5 pesan sebelumnya')
+    expect(host.querySelectorAll('.chat-turn').length).toBe(20)
+
+    // Click load older
+    await act(async()=>loadOlder!.querySelector('button')!.click())
+    expect(host.querySelectorAll('.chat-turn').length).toBe(25)
+    expect(host.querySelector('.chat-load-older')).toBeNull()
+
+    // Start new session
+    const menu=host.querySelector<HTMLDetailsElement>('.chat-header-menu')!
+    menu.open=true
+    const newSessionBtn=[...menu.querySelectorAll('button')].find(b=>b.textContent?.includes('Percakapan baru'))!
+    await act(async()=>newSessionBtn.click())
+    expect(host.querySelectorAll('.chat-turn').length).toBe(0)
+    expect(host.textContent).toContain('Sesi percakapan baru dimulai')
+
+    // Open archive from empty hint
+    const viewArchiveBtn=[...host.querySelectorAll('button')].find(b=>b.textContent?.includes('Lihat arsip'))!
+    await act(async()=>viewArchiveBtn.click())
+    expect(host.querySelector('.chat-session-banner')?.textContent).toContain('Menampilkan seluruh riwayat arsip')
+  }finally{
+    localStorage.removeItem('office-chat-session:otca:video-editor')
+    await act(async()=>root.unmount())
+    host.remove()
+    vi.unstubAllGlobals()
+  }
+})

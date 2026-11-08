@@ -7,6 +7,8 @@ import { agentContextFiles } from '../otca-context.js'
 import { selectOfficialContext } from './context-policy.js'
 import { validateMemoryChoices } from './memory-choices.js'
 import { videoUploadLimit } from './video-attachments.js'
+import { compactChat } from './chat-memory.js'
+import { routeFor } from './model-routes.js'
 
 const DRIVE='https://www.googleapis.com/drive/v3/files'
 const driveId=(id:string)=>{if(!/^[a-zA-Z0-9_-]{1,200}$/.test(id))throw new Error('ID Drive tidak valid.');return id}
@@ -72,6 +74,19 @@ export function installChatRoutes(router:Router,services:Promise<OfficeServices>
   router.get(`${base}/chat-evidence`,handle(async o=>o.chat.evidence(o.brand,o.agent)))
   router.get(`${base}/chat-memory`,handle(async o=>o.chat.memory(o.brand,o.agent)))
   router.put(`${base}/chat-memory`,handle(async(o,r)=>o.chat.updateMemory(o.brand,o.agent,r.body??{})))
+  router.post(`${base}/compact-memory`,handle(async o=>{
+    const endpoint=o.office.settings?.hermes(o.brand)
+    if(!endpoint || !o.office.hermes)throw new Error('Hermes belum terhubung untuk meringkas memori.')
+    const taskRow=(await o.office.store.db.query(
+      `SELECT id, brand_id AS "brandId", agent_type AS "agentType", kind, title, brief, status, created_at AS "createdAt", updated_at AS "updatedAt" FROM tasks WHERE brand_id=$1 AND agent_type=$2 AND kind='konten.chat' AND status='done' ORDER BY created_at DESC, id DESC LIMIT 1`,
+      [o.brand,o.agent]
+    )).rows[0]
+    if(!taskRow)return {compacted:false,message:'Belum ada percakapan selesai untuk diringkas.'}
+    const route=routeFor({agentType:o.agent,urgent:false,complex:false},o.office.settings?.engineProfile??'dev')
+    await compactChat(o.chat,taskRow,o.office.hermes,endpoint,route,{force:true})
+    const mem=await o.chat.memory(o.brand,o.agent)
+    return {compacted:true,summary:mem.summary,revision:mem.revision}
+  }))
   router.get(`${base}/capabilities`,handle(async o=>{
     const connections=await o.office.store.connections(),mode=(await o.office.store.integrationModes()).get(o.brand)?.get('drive')??'mock'
     const drive=connections.some(c=>c.brandId===o.brand && c.service==='drive' && c.status==='active') && mode!=='mock'
