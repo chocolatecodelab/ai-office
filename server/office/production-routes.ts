@@ -32,6 +32,16 @@ export function installProductionRoutes(router:Router,services:Promise<OfficeSer
     try{await o.store.submitProduction(brand,task.id,output)}catch(error){await o.store.transition(brand,task.id,'failed',{actor:'worker:production',patch:{error:String(error)}});throw error}
     return o.store.task(brand,task.id)
   }))
+  router.post(`${base}/render`,handle(async(o,brand,agent,r)=>{
+    if(agent!=='video-editor'||!o.production)throw new Error('Hanya untuk Video Editor.')
+    const data=z.object({sourceTaskId:z.string().uuid()}).strict().parse(r.body)
+    const source=await o.store.task(brand,data.sourceTaskId)
+    if(!source||source.agentType!==agent)throw new Error('Tugas sumber tidak ditemukan.')
+    const chat=await o.store.createTask(brand,{agentType:agent,kind:'konten.chat',title:`Render video: ${source.title}`.slice(0,160),brief:'Setuju preview terakhir, render MP4 revisinya',createdBy:'pengguna-lokal'})
+    await o.db.query('INSERT INTO chat_inputs(brand_id,task_id,agent_type,production_source_task_id) VALUES($1,$2,$3,$4)',[brand,chat.id,agent,source.id])
+    await o.queue.enqueue(chat)
+    return chat
+  }))
   router.get(`${base}/projects`,handle(async(o,brand,agent,r)=>productionProjects(o.store,brand,agent,String(r.query.q??''))))
   router.get(`${base}/asset-library`,handle(async(o,brand)=> (await o.db.query(`SELECT l.*,a.name,a.mime FROM brand_asset_library l JOIN chat_attachments a ON a.id=l.attachment_id AND a.brand_id=l.brand_id WHERE l.brand_id=$1 AND NOT a.removed ORDER BY l.updated_at DESC`,[brand])).rows))
   router.post(`${base}/asset-library`,handle(async(o,brand,agent,r)=>{

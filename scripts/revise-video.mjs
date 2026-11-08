@@ -1,6 +1,6 @@
 import {createHash} from 'node:crypto';
-import {createRequire} from 'node:module';import {readFileSync,writeFileSync,mkdirSync,copyFileSync} from 'node:fs';import {join} from 'node:path';
-const [root,work]=process.argv.slice(2),req=JSON.parse(readFileSync(join(work,'request.json'),'utf8'));
+import {createRequire} from 'node:module';import {readFileSync,writeFileSync,mkdirSync,copyFileSync} from 'node:fs';import {join, resolve} from 'node:path';
+const [rootArg,workArg]=process.argv.slice(2),root=resolve(rootArg),work=resolve(workArg),req=JSON.parse(readFileSync(join(work,'request.json'),'utf8'));
 const target=join(root,'proyek',req.target),source=join(root,'proyek',req.sourceProject);mkdirSync(join(target,'out'),{recursive:true});mkdirSync(join(target,'cache'));
 copyFileSync(join(source,'cache/sumber.json'),join(target,'cache/sumber.json'));
 const manifest=JSON.parse(readFileSync(join(root,'proyek',req.latestSourceProject??req.sourceProject,'manifest.json'),'utf8'));delete manifest.persetujuan;delete manifest.office_render_approval;Object.assign(manifest,{proyek:req.target,status:'revision-preview',composition:'OfficeRevision',office_source_project:req.sourceProject});writeFileSync(join(target,'manifest.json'),JSON.stringify(manifest,null,2));writeFileSync(join(target,'revision-props.json'),JSON.stringify(req.props,null,2));

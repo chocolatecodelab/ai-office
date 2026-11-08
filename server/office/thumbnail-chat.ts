@@ -12,16 +12,16 @@ export function wantsThumbnailRevision(message:string){const positive=message.sp
 export async function activeVideoProject(store:OfficeStore,task:Task){
  const selected=(await store.db.query('SELECT production_source_task_id AS id FROM chat_inputs WHERE brand_id=$1 AND task_id=$2',[task.brandId,task.id])).rows[0]?.id
  const rows=(await store.db.query(`SELECT p.payload,t.id,a.name,p.report,v.project_id FROM production_jobs p JOIN tasks t ON t.id=p.task_id AND t.brand_id=p.brand_id LEFT JOIN production_versions v ON v.task_id=t.id AND v.brand_id=t.brand_id LEFT JOIN LATERAL (SELECT name FROM assets WHERE task_id=t.id AND brand_id=t.brand_id AND mime='video/mp4' AND storage_key IS NOT NULL LIMIT 1) a ON true
- WHERE t.brand_id=$1 AND t.agent_type=$2 AND t.created_at<$3 AND ($4::uuid IS NULL OR t.id=$4) AND (t.status IN ('waiting_approval','approved','done') OR $4::uuid IS NOT NULL) AND (p.payload->>'nativeProject' IS NOT NULL OR a.name IS NOT NULL)
+ WHERE t.brand_id=$1 AND t.agent_type=$2 AND t.created_at<$3 AND ($4::uuid IS NULL OR t.id=$4) AND (t.status IN ('waiting_approval','approved','done') OR $4::uuid IS NOT NULL) AND (p.payload->>'nativeProject' IS NOT NULL OR a.name IS NOT NULL OR p.report->>'project' IS NOT NULL)
  AND EXISTS(SELECT 1 FROM assets WHERE task_id=t.id AND brand_id=t.brand_id AND storage_key IS NOT NULL)
  ORDER BY t.created_at DESC`,[task.brandId,task.agentType,task.createdAt,selected??null])).rows
  if(!selected&&new Set(rows.map(r=>r.project_id??r.id)).size>1)throw new VideoSourceChoiceRequired()
  const row=rows[0]
  if(selected&&!row)throw new VideoSourceChoiceRequired('Versi sumber yang dipilih tidak memiliki proyek video yang dapat diedit. Pilih hasil video lain melalui Proyek dan versi.')
  if(!row)return undefined
- const project=row.payload.nativeProject??row.name?.replace(/\.mp4$/i,'')
+ const project=row.payload.nativeProject??row.report?.project??row.name?.replace(/\.mp4$/i,'')
  if(!/^[a-z0-9_-]{1,120}$/.test(project??''))return undefined
- return {project,stage:row.report?.stage,sourceTaskId:row.payload.sourceTaskId as string,taskId:row.id}
+ return {project,stage:row.report?.stage,sourceTaskId:(row.payload.sourceTaskId as string)??row.id,taskId:row.id}
 }
 export function thumbnailInstructions(project:unknown){return `\nALAT REVISI THUMBNAIL TERSEDIA. Proyek aktif: ${JSON.stringify(project)}. Gunakan proyek ini; pengguna tidak perlu unggah ulang. Revisi hanya cover, MP4 tetap. Balas hanya JSON {"patch":{"margin":64,"headline":"teks dengan pemenggalan baris\\nberikutnya"}}; field opsional subheadline, frame_time. margin adalah padding kiri/kanan dalam px pada lebar 1080; pilih 48–80 untuk permintaan lebih lapang tanpa angka. Headline maksimal 3 baris, subheadline maksimal 2. Jika margin membuat baris terlalu panjang, ubah pemenggalan saja dan pertahankan kata/isi kecuali pengguna meminta ubah teks. Jangan mengecilkan font. Jika maksud ambigu balas {"question":"..."}. Jangan mengklaim hasil sebelum renderer selesai.`}
 export async function executeThumbnailRevision(deps:RunnerDeps,task:Task,source:NonNullable<Awaited<ReturnType<typeof activeVideoProject>>>,output:string,kind:'thumbnail'|'video'|'render'='thumbnail'){
@@ -33,6 +33,11 @@ export async function executeThumbnailRevision(deps:RunnerDeps,task:Task,source:
  if(!deps.videoAttachments||!deps.production)throw new Error('Alat produksi atau pustaka footage belum tersedia.')
  const hashes:string[]=[]
  for(const binding of job?.payload.video?.sources??[])hashes.push((await deps.videoAttachments!.material(task.brandId,binding.taskId,binding.attachmentId)).sha256)
+ if(!hashes.length){
+  const savedRevision=(await deps.store.db.query("SELECT content FROM assets WHERE brand_id=$1 AND task_id=$2 AND name='video-revision.json' ORDER BY version DESC LIMIT 1",[task.brandId,source.taskId])).rows[0]
+  const snapshot=savedRevision?JSON.parse(savedRevision.content):null
+  if(snapshot?.staticFootageSha256)hashes.push(snapshot.staticFootageSha256)
+ }
  if(!hashes.length)throw new Error('Izin footage proyek sumber tidak tersedia.')
  let approval:Record<string,unknown>={}
  if(kind==='render'){

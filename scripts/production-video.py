@@ -18,7 +18,7 @@ preset = resolve("preset", request["video"]["preset"])
 data = video.preset_efektif(baca_json(preset.path), request["video"]["seed"])
 style, template = resolve("gaya", data["gaya"]), resolve("template", data["template"])
 target = work / "project"
-shutil.copytree(root / "proyek" / "_template-proyek", target)
+shutil.copytree(root / "proyek" / "_template-proyek", target, dirs_exist_ok=True)
 manifest = gabung(baca_json(target / "manifest.json"), data.get("manifest", {}))
 fm, _ = frontmatter(style.path)
 manifest.update(proyek=request["slug"], judul=request["title"], status="brief",

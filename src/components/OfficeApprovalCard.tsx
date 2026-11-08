@@ -7,6 +7,7 @@ import { useAgentDraft } from '../agent-drafts.ts'
 import { sizeLabel } from '../download.ts'
 import { ApprovedDelivery } from './ApprovedDelivery.tsx'
 import { PublicationPlan } from './PublicationPlan.tsx'
+import { VideoRenderAction } from './VideoRenderAction.tsx'
 import { VideoPlanReview,type VideoNarrativePlan } from './VideoPlanReview.tsx'
 
 interface ReviewData {
@@ -58,6 +59,7 @@ export function ApprovalCard({ approval, onDecided }: { approval: OfficeApproval
       {approval.usage&&<details className="review-supporting"><summary>Detail pemrosesan AI</summary><p>{approval.usage.model} · {approval.usage.runs} proses · {(approval.usage.inputTokens+approval.usage.outputTokens).toLocaleString('id-ID')} token</p></details>}
     </>}
     {approval.decision==='approved'&&task&&['konten.produksi','publikasi.caption'].includes(task.kind)&&<ApprovedDelivery brand={approval.brandId} taskId={task.id} canPrepare={task.kind==='konten.produksi'}/>}
+    {approval.decision==='approved'&&task&&task.agentType==='video-editor'&&task.kind==='video.proyek'&&<VideoRenderAction brand={approval.brandId} taskId={task.id}/>}
     {approval.decision==='approved'&&task?.agentType==='social-media-manager'&&task.kind==='publikasi.caption'&&<PublicationPlan brand={approval.brandId} taskId={task.id} caption={task.result??''}/>}
     {!open&&approval.note&&<section><h3>{approval.decision==='rejected'?'Arahan revisi':'Catatan keputusan'}</h3><p>{approval.note}</p></section>}
     {error&&<p className="text-bad" role="alert">{error}</p>}

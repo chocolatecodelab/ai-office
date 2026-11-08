@@ -367,16 +367,22 @@ export class OfficeStore {
       const parent=await this.task(brandId,chatId,tx),child=await this.task(brandId,productionId,tx)
       if(!parent||parent.kind!=='konten.chat'||!child||child.parentId!==chatId||child.agentType!==parent.agentType||!['waiting_approval','approved','done'].includes(child.status))throw new Error('Hasil produksi tidak terhubung dengan percakapan ini.')
       if(parent.status==='done')return parent
-      if(!['queued','running'].includes(parent.status))throw new Error('Percakapan produksi sudah dihentikan atau dijeda.')
+      if(parent.status==='failed'){
+        await this.transition(brandId,chatId,'queued',{actor:'worker:production',reason:'pemulihan tugas anak yang berhasil'},tx)
+        await this.transition(brandId,chatId,'running',{actor:'worker:production'},tx)
+      }else if(parent.status==='queued'){
+        await this.transition(brandId,chatId,'running',{actor:'worker:production'},tx)
+      }else if(parent.status!=='running'){
+        throw new Error('Percakapan produksi sudah dihentikan atau dijeda.')
+      }
       const count=Number((await tx.query("SELECT count(*) AS n FROM assets WHERE brand_id=$1 AND task_id=$2 AND name ~ '^slide-[0-9]+[.]png$'",[brandId,productionId])).rows[0].n)
       const nativeSnapshot=(await tx.query("SELECT 1 FROM assets WHERE brand_id=$1 AND task_id=$2 AND name='storyboard-visual.html'",[brandId,productionId])).rowCount
       const videoResult=(await tx.query("SELECT 1 FROM assets WHERE brand_id=$1 AND task_id=$2 AND mime='video/mp4'",[brandId,productionId])).rowCount
       const thumbnailOnly=(await tx.query("SELECT 1 FROM assets WHERE brand_id=$1 AND task_id=$2 AND name='thumbnail-revision.json'",[brandId,productionId])).rowCount
       const videoPreview=(await tx.query("SELECT 1 FROM assets WHERE brand_id=$1 AND task_id=$2 AND name='video-revision.json'",[brandId,productionId])).rowCount
       const restored=(await tx.query("SELECT payload->>'restoredFrom' AS id FROM production_jobs WHERE brand_id=$1 AND task_id=$2",[brandId,productionId])).rows[0]?.id
-      const reply=restored?'Versi sebelumnya dipulihkan sebagai versi baru. Berkas tersedia di bawah; hasil ini memerlukan persetujuan ulang sebelum publikasi.':videoPreview?'Preview revisi video tersedia di bawah. Tinjau adegan yang berubah sebelum render final; MP4 sebelumnya tetap.':thumbnailOnly?'Thumbnail sudah direvisi. Cover 9:16 dan 3:4 tersedia di bawah untuk ditinjau. MP4 tetap, tanpa render ulang video.':videoResult?'Video selesai dirender. MP4 dengan audio asli yang dinormalisasi dan laporan pemeriksaan tersedia di bawah. Tinjau hasil sebelum publikasi.':nativeSnapshot?'Storyboard visual native siap ditinjau. Buka storyboard-visual.html untuk melihat komposisi tiap adegan. Ini snapshot pipeline asli; persetujuan native dan render final belum dijalankan.':child.agentType==='video-editor'?'Naskah dan rencana adegan siap ditinjau. Berkas proyek dan subtitle draf tersedia di bawah.\n\nTiming subtitle masih estimasi. Lengkapi bahan, buat storyboard visual, dan tinjau hasilnya sebelum render penuh.':`${count} slide carousel selesai dibuat. Gambar dan berkas unduhan tersedia di bawah.\n\nHasil masih draf untuk ditinjau; belum dipublikasikan. Caption, spesifikasi, dan laporan QA juga tersimpan di Folder agent.`
+      const reply=restored?'Versi sebelumnya dipulihkan sebagai versi baru. Berkas tersedia di bawah; hasil ini memerlukan persetujuan ulang sebelum publikasi.':videoResult?'Video selesai dirender. MP4 dengan audio asli yang dinormalisasi dan laporan pemeriksaan tersedia di bawah. Tinjau hasil sebelum publikasi.':nativeSnapshot?'Storyboard visual siap ditinjau. Buka storyboard-visual.html untuk melihat komposisi dan still tiap adegan. Berikan persetujuan visual di tab Review untuk melanjutkan render video Remotion.':videoPreview?'Preview revisi video tersedia di bawah. Tinjau adegan yang berubah sebelum render final; MP4 sebelumnya tetap.':thumbnailOnly?'Thumbnail sudah direvisi. Cover 9:16 dan 3:4 tersedia di bawah untuk ditinjau. MP4 tetap, tanpa render ulang video.':child.agentType==='video-editor'?'Naskah dan rencana adegan siap ditinjau. Berkas proyek dan subtitle draf tersedia di bawah.\n\nTiming subtitle masih estimasi. Lengkapi bahan, buat storyboard visual, dan tinjau hasilnya sebelum render penuh.':`${count} slide carousel selesai dibuat. Gambar dan berkas unduhan tersedia di bawah.\n\nHasil masih draf untuk ditinjau; belum dipublikasikan. Caption, spesifikasi, dan laporan QA juga tersimpan di Folder agent.`
       await tx.query('INSERT INTO assets(task_id,brand_id,kind,version,content) SELECT $1,$2,\'konten.chat\',coalesce(max(version),0)+1,$3 FROM assets WHERE task_id=$1',[chatId,brandId,reply])
-      if(parent.status==='queued')await this.transition(brandId,chatId,'running',{actor:'worker:production'},tx)
       await this.logEvent(tx,parent,'chat_production_completed',{taskId:productionId,slides:count})
       return this.transition(brandId,chatId,'done',{actor:'worker:production',reason:'hasil produksi ditampilkan di chat',patch:{result:reply,error:null,completed_at:new Date().toISOString()}},tx)
     }
@@ -693,6 +699,11 @@ export class OfficeStore {
       }
       if(input.decision==='approved'&&approval.approvalType==='konten'&&task.kind==='konten.produksi'&&task.agentType==='content-creator'){
         handoffTask=await this.createApprovedPackage(brandId,task,approval,input.actor,tx)
+      }
+      if(input.decision==='approved'&&task.kind==='video.proyek'&&task.agentType==='video-editor'){
+        const saved=(await tx.query("SELECT content FROM assets WHERE brand_id=$1 AND task_id=$2 AND name='video-revision.json' ORDER BY version DESC LIMIT 1",[brandId,task.id])).rows[0]
+        const snapshot=saved?JSON.parse(saved.content):null
+        await this.logEvent(tx,task,'video_storyboard_approved',{approvalId,sourceTaskId:task.id,snapshot})
       }
       if(input.decision==='rejected'&&task.kind==='konten.produksi'&&task.agentType==='content-creator'){
         revisionTask=await this.createTask(brandId,{agentType:task.agentType,kind:'konten.chat',title:'Revisi hasil berdasarkan review',brief:`Revisi carousel yang ditinjau. Arahan reviewer: ${(note??'').slice(0,4000)}\n\nBrief awal: ${task.brief.slice(0,6000)}\nPertahankan bagian yang tidak diminta berubah. Render ulang dan tampilkan hasil revisi di chat.`,createdBy:input.actor},tx)

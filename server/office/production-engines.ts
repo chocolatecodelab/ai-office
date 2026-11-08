@@ -147,7 +147,12 @@ export class ProductionEngines {
     await writeFile(join(work,'request.json'),JSON.stringify({...staged,video_sources:videoSources,brand:PRODUCTION_BRANDS[brand],slug:`office-${id}-${attempt}`,contextVersion:context.version,engineSource:initialSource},null,2))
     const executable=agent==='content-creator'?process.execPath:join(root,'.venv/Scripts/python.exe')
     const args=agent==='content-creator'?['--import',pathToFileURL(join(root,'node_modules/tsx/dist/loader.mjs')).href,join(scriptRoot,'production-content.mjs'),root,work]:[join(scriptRoot,'production-video.py'),root,work]
-    try{await runProductionProcess(executable,args,root,{timeoutMs:agent==='content-creator'?600000:120000,signal,env:{...(this.config.browserDir?{PLAYWRIGHT_BROWSERS_PATH:this.config.browserDir}:{}),...(agent==='video-editor'?{VIDEO_TEMP:join(work,'.temporary')}:{})}})}
+    try{
+      await runProductionProcess(executable,args,root,{timeoutMs:agent==='content-creator'?600000:120000,signal,env:{...(this.config.browserDir?{PLAYWRIGHT_BROWSERS_PATH:this.config.browserDir}:{}),...(agent==='video-editor'?{VIDEO_TEMP:join(work,'.temporary')}:{})}})
+      if(agent==='video-editor'&&request.video?.plan){
+        await runProductionProcess(process.execPath,[join(scriptRoot,'render-storyboard.mjs'),root,work],root,{timeoutMs:300000,signal,env:{VIDEO_TEMP:join(work,'.temporary'),TEMP:join(work,'.temporary'),TMP:join(work,'.temporary')}})
+      }
+    }
     catch(error){
       const failure=join(work,'failure.json')
       if(existsSync(failure)){const report=JSON.parse(await readFile(failure,'utf8'));if(report.type==='qa')throw new ProductionQaError(report.issues)}
@@ -175,8 +180,9 @@ export class ProductionEngines {
     }
     if(materials.length)files.push({name:'asset-provenance.json',mime:'application/json',data:Buffer.from(JSON.stringify(materials.map(m=>({id:m.id,path:m.path,source:m.source,license:m.license,evidence:m.evidence,sha256:m.sha256})),null,2))})
     if(initialDesign)files.push({name:'design-provenance.json',mime:'application/json',data:Buffer.from(JSON.stringify({...initialDesign,contextVersion:context.version,contextFiles:context.files},null,2))})
-    const status=agent==='content-creator'?'Render dan QA selesai; perlu review manusia.':request.video?.plan?'Naskah dan rencana adegan siap ditinjau. Timing subtitle masih estimasi; storyboard visual dan render penuh menunggu bahan serta persetujuan pipeline.':'Proyek video disiapkan. Beat-sheet masih draf; belum ada render video atau persetujuan storyboard.'
-    return {content:`${request.title}\n\n${status}\n\nStatus pipeline: ${report.status}\n\n${files.map(f=>`- ${f.name}`).join('\n')}`,files,report:{remoteVerification,source:initialSource,status:report.status,contextVersion:context.version,contextFiles:context.files,files:files.map(f=>f.name),designProvenance:request.spec?._officeDesign,stage:agent==='content-creator'?'review':request.video?.plan?'narrative-plan':'draft-project'}}
+    const hasStoryboardVisual=files.some(f=>f.name==='storyboard-visual.html')
+    const status=agent==='content-creator'?'Render dan QA selesai; perlu review manusia.':hasStoryboardVisual?'Naskah dan storyboard visual siap ditinjau. Still render Remotion tersedia untuk setiap adegan; render MP4 penuh menunggu persetujuan review.':request.video?.plan?'Naskah dan rencana adegan siap ditinjau. Timing subtitle masih estimasi; storyboard visual dan render penuh menunggu bahan serta persetujuan pipeline.':'Proyek video disiapkan. Beat-sheet masih draf; belum ada render video atau persetujuan storyboard.'
+    return {content:`${request.title}\n\n${status}\n\nStatus pipeline: ${report.status}\n\n${files.map(f=>`- ${f.name}`).join('\n')}`,files,report:{remoteVerification,source:initialSource,status:report.status,contextVersion:context.version,contextFiles:context.files,files:files.map(f=>f.name),designProvenance:request.spec?._officeDesign,project:(report as any).project??`office-${id}-${attempt}`,stage:agent==='content-creator'?'review':hasStoryboardVisual?'storyboard-review':request.video?.plan?'narrative-plan':'draft-project'}}
   }
   async renderRevision(brand:string,id:string,project:string,hashes:string[],approval:Record<string,unknown>,signal?:AbortSignal,onProgress?:(percent:number)=>void):Promise<ProductionResult>{
     const root=this.config.videoRoot;if(!root||!/^[-a-f0-9]{36}$/.test(id))throw new Error('Tugas render tidak valid.')
@@ -215,8 +221,9 @@ export class ProductionEngines {
     const root=this.config.videoRoot
     if(!root||!/^[-a-z0-9_]{1,120}$/.test(project))throw new Error('Proyek tidak valid.')
     const m=JSON.parse(readFileSync(join(root,'proyek',project,'manifest.json'),'utf8'))
-    if(m.thumbnail?.brand!==PRODUCTION_BRANDS[brand])throw new Error('Proyek bukan milik brand ini.')
-    return {headline:m.thumbnail.headline,subheadline:m.thumbnail.subheadline,frame_time:m.thumbnail.frame_time,margin:m.thumbnail.margin}
+    const b=m.thumbnail?.brand??m.office_brand??m.brand
+    if(b!==PRODUCTION_BRANDS[brand]&&b!==brand)throw new Error('Proyek bukan milik brand ini.')
+    return {headline:m.thumbnail?.headline??m.judul??'',subheadline:m.thumbnail?.subheadline??'',frame_time:m.thumbnail?.frame_time??0,margin:m.thumbnail?.margin??80}
   }
   async reviseThumbnail(brand:string,id:string,project:string,patch:Record<string,unknown>,hashes:string[]):Promise<ProductionResult>{
     const root=this.config.videoRoot
